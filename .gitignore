@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Secrets: real env files stay out; the examples are committed.
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Local deploy values
+deploy/.env
+
+# Editors / OS
+.DS_Store
+*.iml
+.idea/
