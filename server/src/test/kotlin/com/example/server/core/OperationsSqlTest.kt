@@ -39,7 +39,7 @@ class OperationsSqlTest {
     @Test
     fun operationsScriptReportsQueueAndScheduleHealthOnSeededRows() {
         seedWorld()
-        val metrics = runOperationsScript()
+        val metrics = OperationsReport.run(ds)
 
         listOf(
             "jobs_pending", "jobs_pending_older_than_1h", "jobs_running", "jobs_stale_lease", "jobs_retried",
@@ -64,7 +64,7 @@ class OperationsSqlTest {
 
     @Test
     fun operationsScriptIsHonestAboutAnEmptyDatabase() {
-        val metrics = runOperationsScript()
+        val metrics = OperationsReport.run(ds)
         assertTrue(metrics.isNotEmpty(), "the script must still report every fact with no rows")
         metrics.forEach { (stage, value) ->
             assertEquals(0.0, value, 0.0001, "$stage must be 0 with no rows")
@@ -117,34 +117,5 @@ class OperationsSqlTest {
             schedule(enabled = true, nextRunAt = now.plusMillis(hourMs))
             schedule(enabled = false, nextRunAt = now.minusMillis(hourMs))
         }
-    }
-
-    private fun runOperationsScript(): Map<String, Double> {
-        val script = javaClass.classLoader.getResourceAsStream("analytics/operations.sql")
-            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-        assertNotNull(script, "analytics/operations.sql is missing from the server classpath")
-        // Strip comment lines before splitting on ";", so a stray semicolon in
-        // prose cannot silently cut a statement in half.
-        val anonymous = script.lineSequence()
-            .filterNot { it.trimStart().startsWith("--") }
-            .joinToString("\n")
-        val statements = anonymous.split(";").map { it.trim() }.filter { it.isNotEmpty() }
-        assertTrue(statements.isNotEmpty(), "operations script must contain at least one statement")
-        val metrics = LinkedHashMap<String, Double>()
-        ds.connection.use { connection ->
-            connection.autoCommit = true
-            connection.createStatement().use { statement ->
-                for (sql in statements) {
-                    val hasRows = statement.execute(sql)
-                    if (!hasRows) continue
-                    statement.resultSet.use { rows ->
-                        while (rows.next()) {
-                            metrics[rows.getString("stage")] = rows.getDouble("metric")
-                        }
-                    }
-                }
-            }
-        }
-        return metrics
     }
 }
