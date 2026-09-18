@@ -88,6 +88,19 @@ code. A new endpoint cannot forget the check.
 - `/health` is liveness. `/ready` is readiness: it answers 503 when the
   product's `ReadinessProbe` is not satisfied.
 
+## Reports
+
+Facts about background work are **plain SQL resources**, not a dashboard or an
+admin API. `server/src/main/resources/analytics/operations.sql` reports queue and
+schedule health (`jobs_pending`, `jobs_running`, `jobs_stale_lease`,
+`jobs_retried`, terminal states, `schedules_due`). The same script runs on H2 in
+tests and on Postgres in production, and `OperationsSqlTest` keeps it from
+drifting from the schema.
+
+Add a product-specific stage (outcomes, rejection counts) to your own report over
+your own columns rather than growing a shared one. Keep a semicolon out of every
+comment: the report is executed by splitting on `;`.
+
 ## Persistence
 
 - Postgres in production, H2 in tests. Flyway migrations are the only schema
