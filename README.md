@@ -44,7 +44,9 @@ Typed bound configuration; the RFC 7807 `ProblemDetail` envelope with stable
 codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`) enforced
 before the handler; a durable lease-and-fence job queue; a durable scheduler
 that enqueues into that queue; a batch gate that refuses rather than ships a
-partial batch; structured logs with a request id; `/health` and `/ready`. Every
+partial batch; a bounded prompt budget; webhook intake that verifies the raw
+body and refuses by default; structured logs with a request id; `/health` and
+`/ready`. Every
 one has a test.
 
 Full detail: [`docs/conventions.md`](docs/conventions.md). Other docs:

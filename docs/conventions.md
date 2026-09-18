@@ -54,6 +54,17 @@ branches on the code, never on the message. Throw `ApiException` from a route
 or service; `StatusPages` renders it. Unhandled exceptions answer a fixed
 `Internal server error` and never leak internals.
 
+## Webhooks
+
+Intake verifies before it trusts. The verifier receives the **raw** body (a
+signature covers the bytes the provider sent; re-encoding a parsed body changes
+them) and returns a `VerifiedWebhook` only when the signature proves against it.
+`null` means refused, and the route answers a refusal — an unverified payload is
+never decoded and applied. `HmacWebhookVerifier` is the shared-secret shape
+every provider uses; a blank secret wires `FailClosedWebhooks`, so an endpoint
+that cannot verify refuses everything. The delivery identity (`VerifiedWebhook.eventId`)
+is the dedupe key, so a replay collapses onto the same job.
+
 ## Route policy
 
 Every endpoint declares `PUBLIC`, `AUTHENTICATED`, or `ADMIN` at the route:
@@ -167,6 +178,7 @@ the test cases in the report, not just the build status.
 | `ProductCatalog` | resolving product-specific context | the product's catalog |
 | `JobHandler` | routing a `job_type` to work | the handlers |
 | `BatchGate<T>` | refuse-the-batch rule | the product's gate |
-| `ModelGateway` | one model-call contract, keys server-side | the provider client |
+| `ModelGateway` | one model-call contract, keys server-side | the prompt and schema (an OpenAI-compatible implementation ships here) |
+| `WebhookVerifier` | verify-before-trust intake, fail closed | the provider's secret and signature scheme |
 | `ReadinessProbe` | readiness question | what "ready" means |
 | `RouteGuard` | policy enforcement | what "authenticated" means |

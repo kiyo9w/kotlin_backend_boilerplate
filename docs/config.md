@@ -17,6 +17,7 @@ fails when a bound key is missing from either file.
 | `APP_STORE_EVENTS_TRUST_UNVERIFIED` | `false` | Webhooks stay fail-closed. `true` is a local-testing affordance only. |
 | `APPLE_ROOT_CA_PEM` | blank | JWS verification is unavailable and the route records-without-granting. |
 | `APPLE_ROOT_CA_PATH` | blank | Path fallback for the PEM. |
+| `APP_WEBHOOK_SECRET` | blank | **Webhook intake refuses every delivery.** Set it to the provider's shared secret to enable HMAC-SHA256 verification. |
 
 The `APP_` prefix namespaces the keys this service owns, so a shared host can
 run more than one. A stamped product renames the prefix to its own (the

@@ -6,7 +6,10 @@ import com.example.server.core.NoOpSpendGate
 import com.example.server.core.ReadinessProbe
 import com.example.server.core.RequestId
 import com.example.server.core.RouteGuard
+import com.example.server.core.FailClosedWebhooks
+import com.example.server.core.HmacWebhookVerifier
 import com.example.server.core.RoutePolicy
+import com.example.server.core.WebhookVerifier
 import com.example.server.core.ServerConfig
 import com.example.server.core.coreCompositionFromEnv
 import com.example.server.core.get
@@ -27,6 +30,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.delay
@@ -60,6 +64,16 @@ fun Application.module(
     composition: CoreComposition,
     config: ServerConfig = ServerConfig.fromEnv(ServerEnv::get),
     readiness: ReadinessProbe = dataSourceReadiness(composition.dataSource),
+    /**
+     * Webhook intake. The default refuses every delivery: an endpoint that
+     * cannot verify must not apply. A product wires [HmacWebhookVerifier] with
+     * its provider's secret.
+     */
+    webhooks: WebhookVerifier = if (config.webhooks.secret.isBlank()) {
+        FailClosedWebhooks
+    } else {
+        HmacWebhookVerifier(provider = "example", secret = config.webhooks.secret)
+    },
 ) {
     install(ContentNegotiation) {
         json(Json { encodeDefaults = true; ignoreUnknownKeys = true })
@@ -96,6 +110,20 @@ fun Application.module(
             val job = composition.jobStore.job(call.parameters["id"].orEmpty())
                 ?: throw ApiException(HttpStatusCode.NotFound, "NOT_FOUND", "job not found")
             call.respond(JobStatusDto(id = job.id, status = job.status.name, outcome = job.outcome))
+        }
+        // Webhook intake: verify the raw bytes, then enqueue. Never decode or
+        // apply an unverified body — a refusal is a refusal.
+        post("/v1/example/webhooks", RoutePolicy.PUBLIC) {
+            val raw = call.receiveText()
+            val signature = call.request.header("X-Signature-256")
+            val verified = webhooks.verify(raw, signature)
+                ?: throw ApiException(HttpStatusCode.Unauthorized, "INVALID_WEBHOOK", "webhook rejected")
+            val job = composition.jobStore.enqueue(
+                key = "webhook:${verified.provider}:${verified.eventId}",
+                jobType = ExampleJobTypes.ECHO,
+                payload = verified.rawBody,
+            )
+            call.respond(HttpStatusCode.Accepted, JobAcceptedDto(job.id))
         }
     }
     composition.worker?.let { worker ->

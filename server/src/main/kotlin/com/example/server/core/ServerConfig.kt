@@ -18,6 +18,7 @@ object ConfigKey {
     const val STORE_EVENTS_TRUST_UNVERIFIED = "APP_STORE_EVENTS_TRUST_UNVERIFIED"
     const val APPLE_ROOT_CA_PEM = "APPLE_ROOT_CA_PEM"
     const val APPLE_ROOT_CA_PATH = "APPLE_ROOT_CA_PATH"
+    const val WEBHOOK_SECRET = "APP_WEBHOOK_SECRET"
 
     /** Every bound key, in the order the examples document them. */
     val all: List<String> = listOf(
@@ -33,6 +34,7 @@ object ConfigKey {
         STORE_EVENTS_TRUST_UNVERIFIED,
         APPLE_ROOT_CA_PEM,
         APPLE_ROOT_CA_PATH,
+        WEBHOOK_SECRET,
     )
 }
 
@@ -113,6 +115,14 @@ data class RateCaps(val seedsPerDay: Int, val talkPerDay: Int) {
 
 private fun String.capOrDefault(default: Int): Int = trim().toIntOrNull() ?: default
 
+/** Webhook intake. A blank secret means every delivery is refused, not trusted. */
+data class WebhookConfig(val secret: String) {
+    companion object {
+        fun from(env: (String) -> String): WebhookConfig =
+            WebhookConfig(env(ConfigKey.WEBHOOK_SECRET).trim())
+    }
+}
+
 /** Store webhook trust. Trust is explicit, certificate-backed, and fail-closed. */
 data class StoreEventsConfig(
     val trustUnverified: Boolean,
@@ -139,6 +149,7 @@ data class ServerConfig(
     val model: ModelConfig,
     val caps: RateCaps,
     val storeEvents: StoreEventsConfig,
+    val webhooks: WebhookConfig,
     val factoryKilled: Boolean,
 ) {
     companion object {
@@ -147,6 +158,7 @@ data class ServerConfig(
             model = ModelConfig.from(env),
             caps = RateCaps.from(env),
             storeEvents = StoreEventsConfig.from(env),
+            webhooks = WebhookConfig.from(env),
             factoryKilled = env(ConfigKey.FACTORY_KILL).trim().lowercase() in setOf("1", "true", "yes"),
         )
     }
