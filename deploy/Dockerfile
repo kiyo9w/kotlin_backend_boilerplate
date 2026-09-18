@@ -19,9 +19,9 @@ RUN apt-get update \
 WORKDIR /app
 
 # Run as a non-root user: the process needs no write access to the image.
-RUN useradd --system --create-home --uid 10001 qoloa
-COPY --from=build --chown=qoloa:qoloa /app/server/build/install/server/ ./
-USER qoloa
+RUN useradd --system --create-home --uid 10001 myproduct
+COPY --from=build --chown=myproduct:myproduct /app/server/build/install/server/ ./
+USER myproduct
 
 ENV PORT=8080
 EXPOSE 8080

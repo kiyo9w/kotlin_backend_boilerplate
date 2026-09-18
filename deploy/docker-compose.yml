@@ -11,13 +11,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-qoloa}
+      POSTGRES_USER: ${POSTGRES_USER:-myproduct}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
-      POSTGRES_DB: ${POSTGRES_DB:-qoloa}
+      POSTGRES_DB: ${POSTGRES_DB:-myproduct}
     volumes:
-      - qoloa-postgres:/var/lib/postgresql/data
+      - myproduct-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qoloa} -d ${POSTGRES_DB:-qoloa}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-myproduct} -d ${POSTGRES_DB:-myproduct}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -32,18 +32,18 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-qoloa}
-      DATABASE_USER: ${POSTGRES_USER:-qoloa}
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-myproduct}
+      DATABASE_USER: ${POSTGRES_USER:-myproduct}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
-      CMD_API_KEY: ${CMD_API_KEY:-}
-      CMD_BASE: ${CMD_BASE:-https://api.commandcode.ai/provider/v1}
-      CMD_MODEL: ${CMD_MODEL:-meta/muse-spark-1.2-contributor}
-      QOLOA_DAILY_SEED_CAP: ${QOLOA_DAILY_SEED_CAP:-24}
-      QOLOA_DAILY_TALK_CAP: ${QOLOA_DAILY_TALK_CAP:-120}
-      QOLOA_FACTORY_KILL: ${QOLOA_FACTORY_KILL:-}
-      QOLOA_STORE_EVENTS_TRUST_UNVERIFIED: ${QOLOA_STORE_EVENTS_TRUST_UNVERIFIED:-false}
-      QOLOA_APPLE_ROOT_CA_PEM: ${QOLOA_APPLE_ROOT_CA_PEM:-}
-      QOLOA_APPLE_ROOT_CA_PATH: ${QOLOA_APPLE_ROOT_CA_PATH:-}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_BASE: ${MODEL_BASE:-https://api.openai.com/v1}
+      MODEL_NAME: ${MODEL_NAME:-gpt-4o-mini}
+      APP_DAILY_SEED_CAP: ${APP_DAILY_SEED_CAP:-24}
+      APP_DAILY_TALK_CAP: ${APP_DAILY_TALK_CAP:-120}
+      APP_FACTORY_KILL: ${APP_FACTORY_KILL:-}
+      APP_STORE_EVENTS_TRUST_UNVERIFIED: ${APP_STORE_EVENTS_TRUST_UNVERIFIED:-false}
+      APPLE_ROOT_CA_PEM: ${APPLE_ROOT_CA_PEM:-}
+      APPLE_ROOT_CA_PATH: ${APPLE_ROOT_CA_PATH:-}
     ports:
       - "127.0.0.1:${SERVER_PORT:-8081}:8080"
     healthcheck:
@@ -54,5 +54,5 @@ services:
       start_period: 30s
 
 volumes:
-  qoloa-postgres:
-    name: qoloa-postgres
+  myproduct-postgres:
+    name: myproduct-postgres

@@ -54,15 +54,6 @@ class ServerConfigTest {
     }
 
     @Test
-    fun apiKeyAliasFillsInWhenThePrimaryIsBlank() {
-        val config = ServerConfig.fromEnv { key ->
-            if (key == ConfigKey.MODEL_API_KEY_ALIAS) "alias-key" else ""
-        }
-        assertEquals("alias-key", config.model.apiKey)
-        assertTrue(config.model.configured)
-    }
-
-    @Test
     fun capsOfZeroOrLessAreAnHonestUncappedValue() {
         val zero = ServerConfig.fromEnv { if (it == ConfigKey.DAILY_SEED_CAP) "0" else "" }
         assertEquals(0, zero.caps.seedsPerDay, "zero stays zero; BudgetLimits treats <= 0 as uncapped")
@@ -133,7 +124,7 @@ class ConfigExampleTest {
 
     @Test
     fun theProductionExampleNeverCarriesASecretValue() {
-        val secrets = listOf(ConfigKey.MODEL_API_KEY, ConfigKey.MODEL_API_KEY_ALIAS)
+        val secrets = listOf(ConfigKey.MODEL_API_KEY)
         val lines = readExample(".env.production.example")
         secrets.forEach { key ->
             val value = lines.firstOrNull { it.trimStart().startsWith("$key=") }

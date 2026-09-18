@@ -7,24 +7,22 @@ package com.example.server.core
  */
 object ConfigKey {
     const val DATABASE_URL = "DATABASE_URL"
-    const val MODEL_API_KEY = "CMD_API_KEY"
-    const val MODEL_API_KEY_ALIAS = "XAI_API_KEY"
-    const val MODEL_BASE_URL = "CMD_BASE"
-    const val MODEL_NAME = "CMD_MODEL"
-    const val MODEL_CONTEXT_TOKENS = "CMD_CONTEXT_TOKENS"
-    const val MODEL_MAX_OUTPUT_TOKENS = "CMD_MAX_OUTPUT_TOKENS"
-    const val DAILY_SEED_CAP = "QOLOA_DAILY_SEED_CAP"
-    const val DAILY_TALK_CAP = "QOLOA_DAILY_TALK_CAP"
-    const val FACTORY_KILL = "QOLOA_FACTORY_KILL"
-    const val STORE_EVENTS_TRUST_UNVERIFIED = "QOLOA_STORE_EVENTS_TRUST_UNVERIFIED"
-    const val APPLE_ROOT_CA_PEM = "QOLOA_APPLE_ROOT_CA_PEM"
-    const val APPLE_ROOT_CA_PATH = "QOLOA_APPLE_ROOT_CA_PATH"
+    const val MODEL_API_KEY = "MODEL_API_KEY"
+    const val MODEL_BASE_URL = "MODEL_BASE"
+    const val MODEL_NAME = "MODEL_NAME"
+    const val MODEL_CONTEXT_TOKENS = "MODEL_CONTEXT_TOKENS"
+    const val MODEL_MAX_OUTPUT_TOKENS = "MODEL_MAX_OUTPUT_TOKENS"
+    const val DAILY_SEED_CAP = "APP_DAILY_SEED_CAP"
+    const val DAILY_TALK_CAP = "APP_DAILY_TALK_CAP"
+    const val FACTORY_KILL = "APP_FACTORY_KILL"
+    const val STORE_EVENTS_TRUST_UNVERIFIED = "APP_STORE_EVENTS_TRUST_UNVERIFIED"
+    const val APPLE_ROOT_CA_PEM = "APPLE_ROOT_CA_PEM"
+    const val APPLE_ROOT_CA_PATH = "APPLE_ROOT_CA_PATH"
 
     /** Every bound key, in the order the examples document them. */
     val all: List<String> = listOf(
         DATABASE_URL,
         MODEL_API_KEY,
-        MODEL_API_KEY_ALIAS,
         MODEL_BASE_URL,
         MODEL_NAME,
         MODEL_CONTEXT_TOKENS,
@@ -42,8 +40,8 @@ object ConfigKey {
 object ConfigDefaults {
     const val SEEDS_PER_DAY = 24
     const val TALK_PER_DAY = 120
-    const val MODEL_BASE_URL = "https://api.commandcode.ai/provider/v1"
-    const val MODEL_NAME = "meta/muse-spark-1.2-contributor"
+    const val MODEL_BASE_URL = "https://api.openai.com/v1"
+    const val MODEL_NAME = "gpt-4o-mini"
 
     /**
      * The model's context window and the output space reserved inside it. The
@@ -90,7 +88,7 @@ data class ModelConfig(
             // that can never fit a prompt.
             val sane = contextTokens > maxOutputTokens
             return ModelConfig(
-                apiKey = env(ConfigKey.MODEL_API_KEY).ifBlank { env(ConfigKey.MODEL_API_KEY_ALIAS) }.trim(),
+                apiKey = env(ConfigKey.MODEL_API_KEY).trim(),
                 baseUrl = env(ConfigKey.MODEL_BASE_URL).trim().ifBlank { ConfigDefaults.MODEL_BASE_URL },
                 model = env(ConfigKey.MODEL_NAME).trim().ifBlank { ConfigDefaults.MODEL_NAME },
                 contextTokens = if (sane) contextTokens else ConfigDefaults.CONTEXT_TOKENS,

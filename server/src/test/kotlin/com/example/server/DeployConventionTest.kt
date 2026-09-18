@@ -34,8 +34,8 @@ class DeployConventionTest {
                 "${root.relativize(file)} references mobile/, which does not exist in this layout",
             )
             assertFalse(
-                body.contains("Qoloa"),
-                "${root.relativize(file)} carries the donating product's capitalised name",
+                body.lowercase().contains("qoloa"),
+                "${root.relativize(file)} carries the donating product's name",
             )
         }
     }

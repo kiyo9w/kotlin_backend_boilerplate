@@ -14,7 +14,7 @@
 module.exports = {
   apps: [
     {
-      name: 'qoloa-server',
+      name: 'myproduct-server',
       cwd: __dirname + '/../server/build/install/server',
       script: './bin/server',
       interpreter: 'none',
@@ -30,11 +30,11 @@ module.exports = {
         ENVIRONMENT: 'production',
         PORT: '8080',
         // DATABASE_URL, DATABASE_USER, DATABASE_PASSWORD,
-        // CMD_API_KEY, QOLOA_APPLE_ROOT_CA_{PEM,PATH} and the rest are
+        // MODEL_API_KEY, APPLE_ROOT_CA_{PEM,PATH} and the rest are
         // supplied by the host environment / secret store.
       },
-      out_file: '/var/log/qoloa/server.out.log',
-      error_file: '/var/log/qoloa/server.err.log',
+      out_file: '/var/log/myproduct/server.out.log',
+      error_file: '/var/log/myproduct/server.err.log',
       merge_logs: true,
       time: true,
     },

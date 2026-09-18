@@ -75,8 +75,8 @@ find "$TARGET" -type f \
      -o -name '*.example' -o -name 'Dockerfile' -o -name '.gitignore' -o -name '*.sql' \) \
   -print0 | xargs -0 perl -pi -e "
     s/\bcom\.example\b/$PACKAGE/g;
-    s/\bQOLOA_/${ENV_PREFIX}/g;
-    s/\bqoloa\b/$SLUG/g;
+    s/\bAPP_/${ENV_PREFIX}/g;
+    s/myproduct/$SLUG/g;
     s/\bkotlin_backend_boilerplate\b/$SLUG/g;
   " 2>/dev/null || true
 

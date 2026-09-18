@@ -20,7 +20,7 @@ cp deploy/.env.example deploy/.env   # then fill POSTGRES_PASSWORD and any crede
 deploy/deploy.sh
 ```
 
-- The database lives in the named volume `qoloa-postgres`. `docker compose down`
+- The database lives in the named volume `myproduct-postgres`. `docker compose down`
   keeps it; `down -v` erases it and asks first.
 - The server binds `127.0.0.1:8081`; nginx is the only public listener.
 - `deploy.sh` waits for `/ready`, so a container that cannot reach Postgres

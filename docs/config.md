@@ -8,19 +8,19 @@ fails when a bound key is missing from either file.
 | Key | Default | Absent means |
 | --- | --- | --- |
 | `DATABASE_URL` | blank | **Local-only memory mode.** No durability; counts die with the process. |
-| `CMD_API_KEY` | blank | Model routes are off; `/v1/example/jobs` still queues an authored result. |
-| `XAI_API_KEY` | blank | Alias for `CMD_API_KEY`, tried second. |
-| `CMD_BASE` | `https://api.commandcode.ai/provider/v1` | OpenAI-compatible base URL. |
-| `CMD_MODEL` | `meta/muse-spark-1.2-contributor` | Model name. |
-| `QOLOA_DAILY_SEED_CAP` | `24` | Server default. `<= 0` means uncapped. |
-| `QOLOA_DAILY_TALK_CAP` | `120` | Server default. `<= 0` means uncapped. |
-| `QOLOA_FACTORY_KILL` | blank | Model routes stay on. `1` / `true` / `yes` turns them off. |
-| `QOLOA_STORE_EVENTS_TRUST_UNVERIFIED` | `false` | Webhooks stay fail-closed. `true` is a local-testing affordance only. |
-| `QOLOA_APPLE_ROOT_CA_PEM` | blank | JWS verification is unavailable and the route records-without-granting. |
-| `QOLOA_APPLE_ROOT_CA_PATH` | blank | Path fallback for the PEM. |
+| `MODEL_API_KEY` | blank | Model routes are off; `/v1/example/jobs` still queues an authored result. |
+| `MODEL_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
+| `MODEL_NAME` | `gpt-4o-mini` | Model name. |
+| `APP_DAILY_SEED_CAP` | `24` | Server default. `<= 0` means uncapped. |
+| `APP_DAILY_TALK_CAP` | `120` | Server default. `<= 0` means uncapped. |
+| `APP_FACTORY_KILL` | blank | Model routes stay on. `1` / `true` / `yes` turns them off. |
+| `APP_STORE_EVENTS_TRUST_UNVERIFIED` | `false` | Webhooks stay fail-closed. `true` is a local-testing affordance only. |
+| `APPLE_ROOT_CA_PEM` | blank | JWS verification is unavailable and the route records-without-granting. |
+| `APPLE_ROOT_CA_PATH` | blank | Path fallback for the PEM. |
 
-The `QOLOA_` prefix is the reference product's namespace. A stamped product
-renames the prefix (the generator does this).
+The `APP_` prefix namespaces the keys this service owns, so a shared host can
+run more than one. A stamped product renames the prefix to its own (the
+generator does this).
 
 ## Secrets
 
