@@ -117,6 +117,25 @@ class SqlJobStore : JobStore {
         null
     }
 
+    override suspend fun renewLease(jobId: String, attempt: Int, nowEpochMs: Long, leaseMs: Long) =
+        coreDbQuery {
+            val uuid = Uuid.parse(jobId)
+            val updated = GenericJobs.update({
+                (GenericJobs.id eq uuid) and
+                    (GenericJobs.attempt eq attempt) and
+                    (GenericJobs.status eq JobState.RUNNING.name)
+            }) {
+                it[leaseExpiresAt] = java.time.Instant.ofEpochMilli(nowEpochMs + leaseMs)
+            }
+            if (updated == 0) {
+                val exists = GenericJobs.selectAll().where { GenericJobs.id eq uuid }.firstOrNull()
+                    ?: throw NoSuchElementException("job $jobId not found")
+                throw StaleClaimException(
+                    "job $jobId is not held by attempt $attempt (is ${exists[GenericJobs.attempt]})",
+                )
+            }
+        }
+
     override suspend fun finish(jobId: String, attempt: Int, result: String, outcome: String): JobRecord =
         coreDbQuery {
             val uuid = Uuid.parse(jobId)

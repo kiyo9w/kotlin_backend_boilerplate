@@ -27,6 +27,19 @@ interface JobStore {
     suspend fun claimPending(nowEpochMs: Long, leaseMs: Long): JobRecord?
 
     /**
+     * Extend the lease on a claim that is still held (lease heartbeat). A
+     * handler that outlives the original lease would otherwise be reclaimed by
+     * another worker mid-flight, and a paid side effect would run twice. Only
+     * the holder may renew: a job whose attempt no longer matches, or that is no
+     * longer RUNNING, throws [StaleClaimException] so the heartbeat stops.
+     *
+     * Lifted from db-scheduler's heartbeat/dead-execution mechanism: the lease
+     * timestamp *is* the heartbeat, and a missed renewal is what makes a run
+     * reclaimable. No extra column is needed.
+     */
+    suspend fun renewLease(jobId: String, attempt: Int, nowEpochMs: Long, leaseMs: Long)
+
+    /**
      * Record the terminal state for [attempt]. A write whose [attempt] is no
      * longer the job's current attempt throws [StaleClaimException] instead of
      * overwriting the live attempt.

@@ -61,6 +61,16 @@ class MemoryJobStore(
         }
     }
 
+    override suspend fun renewLease(jobId: String, attempt: Int, nowEpochMs: Long, leaseMs: Long) {
+        synchronized(lock) {
+            val hit = jobs[jobId] ?: throw NoSuchElementException("job $jobId not found")
+            requireCurrentClaim(hit.record, attempt)
+            jobs[jobId] = hit.copy(
+                record = hit.record.copy(leaseExpiresAtEpochMs = nowEpochMs + leaseMs),
+            )
+        }
+    }
+
     override suspend fun finish(jobId: String, attempt: Int, result: String, outcome: String): JobRecord {
         synchronized(lock) {
             val hit = jobs[jobId] ?: throw NoSuchElementException("job $jobId not found")
