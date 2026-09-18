@@ -101,6 +101,27 @@ Add a product-specific stage (outcomes, rejection counts) to your own report ove
 your own columns rather than growing a shared one. Keep a semicolon out of every
 comment: the report is executed by splitting on `;`.
 
+## Deliberate non-choices
+
+These are decisions, not omissions. Each has a trigger that would reverse it;
+until the trigger fires, adding the thing is over-engineering.
+
+| Not adopted | Why | Trigger that reverses it |
+| --- | --- | --- |
+| A scheduler library (Quartz, db-scheduler, JobRunr) | One `schedules` table plus a compare-and-set cursor covers daily/weekly/monthly/yearly, and it shares the queue's table and semantics. JobRunr is also LGPLv3 | Recurring work must survive multi-instance deployment in a way the cursor cannot express, or cron expressions become a real requirement |
+| A message broker (Redis, RabbitMQ, Kafka) | The Postgres queue is durable, transactional with the business write, and one fewer system to run | Measured throughput the Postgres queue cannot carry |
+| A server DI framework | Explicit composition in `Application.kt` is readable and needs no reflection | The object graph outgrows a screen of code |
+| A `:contract` module by default | The server can depend on the product's shared module directly; splitting early adds a module for no benefit | The server starts dragging client-only dependencies (UI, device APIs) into its build |
+| An OpenAPI/codegen pipeline | Kotlin clients share the DTO module directly, so there is nothing to generate | A non-Kotlin client (for example Flutter) appears |
+| Testcontainers by default | The H2 fast path runs everywhere with no infrastructure; the production claims are proven by the opt-in Postgres suite | The Postgres suite needs to run in CI on every push |
+| A second deployable worker | The worker is in-process and the queue is single-flight; scaling out means another host, not another service | Worker load must scale independently of HTTP load |
+| Event sourcing, CQRS, a generic repository layer | The product domains are small and readable; these add indirection before it pays | A domain's read and write models genuinely diverge |
+
+The queue itself is the same decision: a hand-rolled lease-and-fence store
+(one table, compare-and-set, heartbeat) rather than a library. It is small,
+tested on both engines, and shares the product's `jobs` table, which a library
+would not.
+
 ## Persistence
 
 - Postgres in production, H2 in tests. Flyway migrations are the only schema
