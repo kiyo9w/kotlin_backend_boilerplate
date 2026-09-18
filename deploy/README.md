@@ -9,14 +9,14 @@ Postgres beside it. Pick either Docker Compose or PM2 — not both on one host.
 | --- | --- |
 | `Dockerfile` | Multi-stage build of `:server:installDist` into a JRE runtime image. |
 | `docker-compose.yml` | Server + Postgres, named volume, healthchecks, loopback-only port. |
-| `nginx/qoloa.conf` | TLS termination, proxy headers, and the correlation-id passthrough. |
+| `nginx/app.conf` | TLS termination, proxy headers, and the correlation-id passthrough. |
 | `ecosystem.config.js` | PM2 process config for a host that runs the distribution directly. |
 | `deploy.sh` | Build, start, and **verify readiness**; a deploy that is not ready fails. |
 
 ## Docker Compose
 
 ```bash
-cp .env.example .env      # then fill POSTGRES_PASSWORD and any credentials
+cp deploy/.env.example deploy/.env   # then fill POSTGRES_PASSWORD and any credentials
 deploy/deploy.sh
 ```
 
@@ -29,7 +29,7 @@ deploy/deploy.sh
 ## PM2
 
 ```bash
-cd mobile && ./gradlew :server:installDist
+./gradlew :server:installDist
 pm2 start deploy/ecosystem.config.js && pm2 save
 ```
 
@@ -41,8 +41,8 @@ instances, so running several on one host buys nothing.
 
 No credential lives in this directory. `deploy/.env` is gitignored and holds the
 values `docker-compose.yml` references; PM2 and nginx take theirs from the host
-environment or a read-only mount. The full key set is `mobile/.env.example` and
-`mobile/.env.production.example`.
+environment or a read-only mount. The full key set is `.env.example` and
+`.env.production.example` at the repository root.
 
 ## Health
 

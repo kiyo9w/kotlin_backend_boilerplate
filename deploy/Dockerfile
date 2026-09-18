@@ -1,9 +1,8 @@
-# the service server — production image.
+# Backend server — production image.
 #
-# Build from the mobile/ directory so the Gradle build can see shared/ and
-# server/ together:
+# Build from the repository root:
 #
-#   docker build -f deploy/Dockerfile -t qoloa-server mobile
+#   docker build -f deploy/Dockerfile -t <name> .
 #
 # The runtime image carries only the installed distribution, not the source or
 # the Gradle cache.

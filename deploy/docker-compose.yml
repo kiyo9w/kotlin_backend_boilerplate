@@ -25,8 +25,8 @@ services:
 
   server:
     build:
-      context: ../mobile
-      dockerfile: ../deploy/Dockerfile
+      context: ..
+      dockerfile: deploy/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:

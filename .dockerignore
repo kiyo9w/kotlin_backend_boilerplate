@@ -1,0 +1,17 @@
+# Keep the build context small and the secrets out.
+#
+# Without this, `docker build .` ships the Gradle home, every build directory,
+# and any local .env to the daemon before the first line of the Dockerfile runs.
+
+.git
+.gradle
+.gradle-home
+**/build/
+
+# Secrets never enter an image or its build context.
+.env
+.env.*
+
+# Docs are not needed to build or run the server.
+docs/
+*.md

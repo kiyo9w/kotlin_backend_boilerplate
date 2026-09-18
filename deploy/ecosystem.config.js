@@ -15,7 +15,7 @@ module.exports = {
   apps: [
     {
       name: 'qoloa-server',
-      cwd: __dirname + '/../mobile/server/build/install/server',
+      cwd: __dirname + '/../server/build/install/server',
       script: './bin/server',
       interpreter: 'none',
       instances: 1,
