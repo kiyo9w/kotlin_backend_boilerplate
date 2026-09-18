@@ -11,6 +11,8 @@ object ConfigKey {
     const val MODEL_API_KEY_ALIAS = "XAI_API_KEY"
     const val MODEL_BASE_URL = "CMD_BASE"
     const val MODEL_NAME = "CMD_MODEL"
+    const val MODEL_CONTEXT_TOKENS = "CMD_CONTEXT_TOKENS"
+    const val MODEL_MAX_OUTPUT_TOKENS = "CMD_MAX_OUTPUT_TOKENS"
     const val DAILY_SEED_CAP = "QOLOA_DAILY_SEED_CAP"
     const val DAILY_TALK_CAP = "QOLOA_DAILY_TALK_CAP"
     const val FACTORY_KILL = "QOLOA_FACTORY_KILL"
@@ -25,6 +27,8 @@ object ConfigKey {
         MODEL_API_KEY_ALIAS,
         MODEL_BASE_URL,
         MODEL_NAME,
+        MODEL_CONTEXT_TOKENS,
+        MODEL_MAX_OUTPUT_TOKENS,
         DAILY_SEED_CAP,
         DAILY_TALK_CAP,
         FACTORY_KILL,
@@ -40,6 +44,17 @@ object ConfigDefaults {
     const val TALK_PER_DAY = 120
     const val MODEL_BASE_URL = "https://api.commandcode.ai/provider/v1"
     const val MODEL_NAME = "meta/muse-spark-1.2-contributor"
+
+    /**
+     * The model's context window and the output space reserved inside it. The
+     * window only bounds the prompt budget; the enforced input limit stays the
+     * character bound in `SeedWork`, so an allowed input is never silently
+     * trimmed. These are defaults for the locked model and can be overridden
+     * per deployment, because a hardcoded window that does not match the model
+     * makes the budget decorative.
+     */
+    const val CONTEXT_TOKENS = 128_000
+    const val MAX_OUTPUT_TOKENS = 4_096
 }
 
 /** Durable store selection. A blank URL is the explicit local-only memory mode. */
@@ -53,17 +68,40 @@ data class DatabaseConfig(val url: String) {
 }
 
 /** Model gateway credentials. Keys stay server-side; never in an example or a commit. */
-data class ModelConfig(val apiKey: String, val baseUrl: String, val model: String) {
+data class ModelConfig(
+    val apiKey: String,
+    val baseUrl: String,
+    val model: String,
+    /** The model's context window, used to bound the prompt budget. */
+    val contextTokens: Int = ConfigDefaults.CONTEXT_TOKENS,
+    /** Output space reserved inside the window on every call. */
+    val maxOutputTokens: Int = ConfigDefaults.MAX_OUTPUT_TOKENS,
+) {
     val configured: Boolean get() = apiKey.isNotBlank()
 
     companion object {
-        fun from(env: (String) -> String): ModelConfig = ModelConfig(
-            apiKey = env(ConfigKey.MODEL_API_KEY).ifBlank { env(ConfigKey.MODEL_API_KEY_ALIAS) }.trim(),
-            baseUrl = env(ConfigKey.MODEL_BASE_URL).trim().ifBlank { ConfigDefaults.MODEL_BASE_URL },
-            model = env(ConfigKey.MODEL_NAME).trim().ifBlank { ConfigDefaults.MODEL_NAME },
-        )
+        fun from(env: (String) -> String): ModelConfig {
+            val contextTokens = env(ConfigKey.MODEL_CONTEXT_TOKENS)
+                .positiveIntOrDefault(ConfigDefaults.CONTEXT_TOKENS)
+            val maxOutputTokens = env(ConfigKey.MODEL_MAX_OUTPUT_TOKENS)
+                .positiveIntOrDefault(ConfigDefaults.MAX_OUTPUT_TOKENS)
+            // A window smaller than the reserved output is a misconfiguration;
+            // fall back to the pair of defaults rather than building a budget
+            // that can never fit a prompt.
+            val sane = contextTokens > maxOutputTokens
+            return ModelConfig(
+                apiKey = env(ConfigKey.MODEL_API_KEY).ifBlank { env(ConfigKey.MODEL_API_KEY_ALIAS) }.trim(),
+                baseUrl = env(ConfigKey.MODEL_BASE_URL).trim().ifBlank { ConfigDefaults.MODEL_BASE_URL },
+                model = env(ConfigKey.MODEL_NAME).trim().ifBlank { ConfigDefaults.MODEL_NAME },
+                contextTokens = if (sane) contextTokens else ConfigDefaults.CONTEXT_TOKENS,
+                maxOutputTokens = if (sane) maxOutputTokens else ConfigDefaults.MAX_OUTPUT_TOKENS,
+            )
+        }
     }
 }
+
+private fun String.positiveIntOrDefault(default: Int): Int =
+    trim().toIntOrNull()?.takeIf { it > 0 } ?: default
 
 /** Per-subject daily caps. A cap of zero or less means uncapped. */
 data class RateCaps(val seedsPerDay: Int, val talkPerDay: Int) {

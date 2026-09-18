@@ -19,6 +19,8 @@ class ServerConfigTest {
         assertFalse(config.model.configured, "no key means the factory is off")
         assertEquals(ConfigDefaults.MODEL_BASE_URL, config.model.baseUrl)
         assertEquals(ConfigDefaults.MODEL_NAME, config.model.model)
+        assertEquals(ConfigDefaults.CONTEXT_TOKENS, config.model.contextTokens)
+        assertEquals(ConfigDefaults.MAX_OUTPUT_TOKENS, config.model.maxOutputTokens)
         assertEquals(ConfigDefaults.SEEDS_PER_DAY, config.caps.seedsPerDay)
         assertEquals(ConfigDefaults.TALK_PER_DAY, config.caps.talkPerDay)
         assertFalse(config.storeEvents.trustUnverified)
@@ -36,7 +38,7 @@ class ServerConfigTest {
             ConfigKey.DAILY_TALK_CAP to "9",
             ConfigKey.FACTORY_KILL to "yes",
             ConfigKey.STORE_EVENTS_TRUST_UNVERIFIED to "TRUE",
-            ConfigKey.APPLE_ROOT_CA_PATH to "/etc/qoloa/apple.pem",
+            ConfigKey.APPLE_ROOT_CA_PATH to "/etc/example/apple.pem",
         )
         val config = ServerConfig.fromEnv { env[it].orEmpty() }
         assertTrue(config.database.durable)
@@ -48,7 +50,7 @@ class ServerConfigTest {
         assertEquals(9, config.caps.talkPerDay)
         assertTrue(config.factoryKilled)
         assertTrue(config.storeEvents.trustUnverified)
-        assertEquals("/etc/qoloa/apple.pem", config.storeEvents.appleRootPath)
+        assertEquals("/etc/example/apple.pem", config.storeEvents.appleRootPath)
     }
 
     @Test
@@ -73,6 +75,34 @@ class ServerConfigTest {
     fun garbageCapFallsBackToTheDefaultRatherThanCrashing() {
         val config = ServerConfig.fromEnv { if (it == ConfigKey.DAILY_TALK_CAP) "lots" else "" }
         assertEquals(ConfigDefaults.TALK_PER_DAY, config.caps.talkPerDay)
+    }
+
+    @Test
+    fun theModelContextWindowIsBoundAndFallsBackWhenInsane() {
+        val bound = ServerConfig.fromEnv { key ->
+            when (key) {
+                ConfigKey.MODEL_CONTEXT_TOKENS -> "32000"
+                ConfigKey.MODEL_MAX_OUTPUT_TOKENS -> "2048"
+                else -> ""
+            }
+        }
+        assertEquals(32_000, bound.model.contextTokens)
+        assertEquals(2_048, bound.model.maxOutputTokens)
+
+        // Reserving more output than the window is a misconfiguration: take the
+        // sane pair of defaults rather than a budget that can never fit.
+        val insane = ServerConfig.fromEnv { key ->
+            when (key) {
+                ConfigKey.MODEL_CONTEXT_TOKENS -> "1000"
+                ConfigKey.MODEL_MAX_OUTPUT_TOKENS -> "2000"
+                else -> ""
+            }
+        }
+        assertEquals(ConfigDefaults.CONTEXT_TOKENS, insane.model.contextTokens)
+        assertEquals(ConfigDefaults.MAX_OUTPUT_TOKENS, insane.model.maxOutputTokens)
+
+        val garbage = ServerConfig.fromEnv { if (it == ConfigKey.MODEL_CONTEXT_TOKENS) "lots" else "" }
+        assertEquals(ConfigDefaults.CONTEXT_TOKENS, garbage.model.contextTokens)
     }
 
     @Test
