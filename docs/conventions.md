@@ -113,11 +113,31 @@ Two layers:
 
 - **Fast, no infrastructure.** Everything under `core/` and the example API
   tests run on H2 (Postgres mode) and in-process HTTP. `./gradlew test`.
-- **Real database (optional).** Point `DATABASE_URL` at a real Postgres and run
-  the same suite; the SQL tests use whatever the environment provides.
+- **Real Postgres (opt-in).** `PostgresIntegrationTest` proves what H2 cannot:
+  the migrations apply, the report's SQL is portable, and the queue/scheduler
+  compare-and-set holds under real concurrent transactions. It is skipped unless
+  `TEST_POSTGRES_URL` is set:
+
+  ```bash
+  docker run -d --name tpl-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=boilerplate \
+    -p 5433:5432 postgres:16-alpine
+  TEST_POSTGRES_URL=jdbc:postgresql://localhost:5433/boilerplate \
+    TEST_POSTGRES_USER=postgres TEST_POSTGRES_PASSWORD=postgres \
+    ./gradlew :server:test --tests '*PostgresIntegrationTest'
+  ```
+
+  Integration tests share one database, so each one resets the tables it uses.
+  Without that, "a fresh database" is not fresh and a concurrency test can hand
+  two winners two different rows.
 
 A new convention ships with the test that enforces it. A convention without a
 test is a suggestion.
+
+**Write every test body as `Unit`.** A Kotlin test whose last expression returns
+a value (an `assertIs`, a `runBlocking` ending in one) infers a non-`Unit`
+return type, and JUnit5 **silently ignores non-void test methods** — the suite
+stays green while the test never runs. Use `runBlocking<Unit> { ... }` and count
+the test cases in the report, not just the build status.
 
 ## The seams
 
