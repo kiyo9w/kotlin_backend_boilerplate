@@ -16,3 +16,7 @@ deploy/.env
 .DS_Store
 *.iml
 .idea/
+
+# The Gradle home is machine state, never source. It was accidentally tracked
+# before this line existed; the history was purged on 2026-09-18.
+.gradle-home/
