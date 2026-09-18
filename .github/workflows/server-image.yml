@@ -16,6 +16,7 @@ on:
     paths:
       - 'server/**'
       - 'deploy/**'
+  workflow_dispatch:
 
 jobs:
   image:
