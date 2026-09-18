@@ -21,6 +21,12 @@
 SELECT 'jobs_pending' AS stage, CAST(COUNT(*) AS DOUBLE PRECISION) AS metric
 FROM jobs WHERE status = 'PENDING'
 UNION ALL
+-- Waiting jobs older than an hour: a stuck queue, not a busy one.
+-- Not claimed: the threshold is a policy, not a fact. Edit the interval here
+-- when the product's expectation changes.
+SELECT 'jobs_pending_older_than_1h', CAST(COUNT(*) AS DOUBLE PRECISION)
+FROM jobs WHERE status = 'PENDING' AND created_at <= CURRENT_TIMESTAMP - INTERVAL '1' HOUR
+UNION ALL
 -- Jobs a worker currently owns.
 SELECT 'jobs_running', CAST(COUNT(*) AS DOUBLE PRECISION)
 FROM jobs WHERE status = 'RUNNING'

@@ -42,14 +42,15 @@ class OperationsSqlTest {
         val metrics = runOperationsScript()
 
         listOf(
-            "jobs_pending", "jobs_running", "jobs_stale_lease", "jobs_retried",
+            "jobs_pending", "jobs_pending_older_than_1h", "jobs_running", "jobs_stale_lease", "jobs_retried",
             "jobs_terminal_failed", "jobs_terminal_succeeded",
             "schedules_enabled", "schedules_disabled", "schedules_due",
         ).forEach { stage ->
             assertNotNull(metrics[stage], "operations must report the $stage fact")
         }
 
-        assertEquals(1.0, metrics.getValue("jobs_pending"), 0.0001)
+        assertEquals(2.0, metrics.getValue("jobs_pending"), 0.0001, "one fresh and one old waiting job")
+        assertEquals(1.0, metrics.getValue("jobs_pending_older_than_1h"), 0.0001, "only the old one")
         assertEquals(2.0, metrics.getValue("jobs_running"), 0.0001)
         assertEquals(1.0, metrics.getValue("jobs_stale_lease"), 0.0001, "only the past lease is stale")
         assertEquals(2.0, metrics.getValue("jobs_retried"), 0.0001, "attempts 2 and 3 are retries")
@@ -74,7 +75,7 @@ class OperationsSqlTest {
         val now = Instant.now()
         transaction {
             var index = 0
-            fun job(status: JobState, attempt: Int, lease: Instant? = null) {
+            fun job(status: JobState, attempt: Int, lease: Instant? = null, createdAt: Instant = now) {
                 index += 1
                 GenericJobs.insert {
                     it[id] = kotlin.uuid.Uuid.random()
@@ -85,11 +86,12 @@ class OperationsSqlTest {
                     it[leaseExpiresAt] = lease
                     it[result] = ""
                     it[payload] = "{}"
-                    it[createdAt] = now
+                    it[GenericJobs.createdAt] = createdAt
                 }
             }
 
             job(JobState.PENDING, attempt = 0)
+            job(JobState.PENDING, attempt = 0, createdAt = now.minusMillis(2 * hourMs))
             job(JobState.RUNNING, attempt = 2, lease = now.plusMillis(hourMs))
             job(JobState.RUNNING, attempt = 3, lease = now.minusMillis(hourMs))
             job(JobState.SUCCEEDED, attempt = 1)
