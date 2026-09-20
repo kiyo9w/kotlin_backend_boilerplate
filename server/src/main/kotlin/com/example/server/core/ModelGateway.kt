@@ -1,5 +1,7 @@
 package com.example.server.core
 
+import kotlinx.coroutines.flow.Flow
+
 /**
  * Generic model gateway. Every product that calls a model implements this
  * interface; the template ships one OpenAI-compatible implementation. Keys
@@ -18,4 +20,16 @@ interface ModelGateway {
      * or silently empty result.
      */
     suspend fun complete(system: String, user: String): String
+}
+
+/**
+ * A gateway that can stream content deltas. Implementations must throw on
+ * transport failure, never emit a silent empty result.
+ */
+interface StreamingModelGateway : ModelGateway {
+    /**
+     * Content deltas in order. The stream ends after the last delta; an empty
+     * stream is an error.
+     */
+    fun stream(system: String, user: String): Flow<String>
 }

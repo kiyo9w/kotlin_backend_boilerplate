@@ -61,8 +61,8 @@ class RoutePolicyConfig {
 
 /**
  * Route-scoped enforcement. Installed per endpoint by the [get] / [post] /
- * [delete] helpers below, so the policy travels with the route it protects and
- * sibling endpoints never share one policy by accident.
+ * [put] / [patch] / [delete] helpers below, so the policy travels with the
+ * route it protects and sibling endpoints never share one policy by accident.
  */
 private val RoutePolicyPlugin = createRouteScopedPlugin(
     name = "RoutePolicyPlugin",
@@ -86,6 +86,14 @@ fun Route.get(path: String, policy: RoutePolicy, block: suspend RoutingContext.(
 /** Declare a POST endpoint with an explicit route policy. */
 fun Route.post(path: String, policy: RoutePolicy, block: suspend RoutingContext.() -> Unit) =
     endpoint(HttpMethod.Post, path, policy, block)
+
+/** Declare a PUT endpoint with an explicit route policy. */
+fun Route.put(path: String, policy: RoutePolicy, block: suspend RoutingContext.() -> Unit) =
+    endpoint(HttpMethod.Put, path, policy, block)
+
+/** Declare a PATCH endpoint with an explicit route policy. */
+fun Route.patch(path: String, policy: RoutePolicy, block: suspend RoutingContext.() -> Unit) =
+    endpoint(HttpMethod.Patch, path, policy, block)
 
 /** Declare a DELETE endpoint with an explicit route policy. */
 fun Route.delete(path: String, policy: RoutePolicy, block: suspend RoutingContext.() -> Unit) =

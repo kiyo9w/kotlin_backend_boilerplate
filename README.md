@@ -41,12 +41,17 @@ environment-key prefix, and refuses to overwrite a non-empty directory.
 ## The conventions in one breath
 
 Typed bound configuration; the RFC 7807 `ProblemDetail` envelope with stable
-codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`) enforced
-before the handler; a durable lease-and-fence job queue; a durable scheduler
+codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`, with
+`GET` / `POST` / `PUT` / `PATCH` / `DELETE` declarations) enforced before the
+handler; a session shell (opaque hashed access and refresh tokens, rotation,
+revocation, and a bearer guard that publishes the caller); owner-scoped
+versioned documents with compare-and-set; an operation-id idempotency registry
+for long-running work; a durable lease-and-fence job queue; a durable scheduler
 that enqueues into that queue; a batch gate that refuses rather than ships a
-partial batch; a bounded prompt budget; webhook intake that verifies the raw
-body and refuses by default; structured logs with a request id; `/health` and
-`/ready`. Every
+partial batch; a durable per-subject spend gate; SSE streaming (`respondSse`
+plus a streaming model gateway); a bounded prompt budget; webhook intake that
+verifies the raw body and refuses by default; structured logs with a request id;
+`/health` and `/ready`. Every
 one has a test.
 
 Full detail: [`docs/conventions.md`](docs/conventions.md). Other docs:
@@ -57,3 +62,9 @@ Full detail: [`docs/conventions.md`](docs/conventions.md). Other docs:
 
 Extracted 2026-09-18 from a production Kotlin/Ktor service. Mechanisms that came
 from other studied systems are noted in the code where they live.
+
+2026-09-20: added the session shell, versioned documents, operation registry,
+SSE streaming, the durable spend gate, and `PUT` / `PATCH` route declarations
+for the Qoloa and Divini backend plans. Each addition ships with its tests; the
+seams table in [`docs/conventions.md`](docs/conventions.md) states what stays
+product-specific.

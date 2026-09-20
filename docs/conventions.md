@@ -182,3 +182,8 @@ the test cases in the report, not just the build status.
 | `WebhookVerifier` | verify-before-trust intake, fail closed | the provider's secret and signature scheme |
 | `ReadinessProbe` | readiness question | what "ready" means |
 | `RouteGuard` | policy enforcement | what "authenticated" means |
+| `SessionStore` | session persistence; token issue, rotation, and revocation live in `SessionService` | how a caller bootstraps to an owner id (device id, install key, verified provider subject) |
+| `DocumentStore` | owner-scoped versioned documents with compare-and-set | the document schema, what a version means, and how large a payload may grow |
+| `OperationStore` | operation-id idempotency: first-writer-wins, attach, conflict, terminal states | the operation kinds and what the payload hash covers |
+| `StreamingModelGateway` | content deltas from the model; `respondSse` writes the wire | the prompt and the frame payloads |
+| `SpendGate` | per-subject per-period caps; memory and SQL implementations ship | the kinds, the caps, and how a subject is proven to exist |
