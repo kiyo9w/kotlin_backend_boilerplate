@@ -23,9 +23,13 @@ import com.example.server.example.ExampleJobTypes
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.PayloadTooLargeException
+import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
@@ -79,9 +83,31 @@ fun Application.module(
         json(Json { encodeDefaults = true; ignoreUnknownKeys = true })
     }
     install(RequestId)
+    // Every request body is bounded. A declared Content-Length is refused up
+    // front; a chunked body is cut while it streams. Ktor's limiter proxies
+    // the body through a writer coroutine, and the converter may already be
+    // reading when the cap trips, so the refusal can surface wrapped inside
+    // BadRequestException. The handlers below match on the cause chain, not
+    // on the exception type the pipeline happens to raise - do not collapse
+    // them back into one typed handler.
+    install(RequestBodyLimit) {
+        bodyLimit { MAX_REQUEST_BYTES }
+    }
     install(StatusPages) {
         exception<ApiException> { call, cause ->
             call.respondProblem(call.problemDetail(cause.status, cause.code, cause.message))
+        }
+        exception<PayloadTooLargeException> { call, _ ->
+            call.respondProblem(call.requestTooLarge())
+        }
+        exception<BadRequestException> { call, cause ->
+            if (cause.requestLimitExceeded()) {
+                call.respondProblem(call.requestTooLarge())
+            } else {
+                call.respondProblem(
+                    call.problemDetail(HttpStatusCode.BadRequest, "BAD_REQUEST", "request could not be understood"),
+                )
+            }
         }
         exception<Throwable> { call, cause ->
             if (cause is kotlin.coroutines.cancellation.CancellationException) throw cause
@@ -163,6 +189,22 @@ fun dataSourceReadiness(dataSource: DataSource?): ReadinessProbe = ReadinessProb
         runCatching { dataSource.connection.use { it.isValid(2) } }.getOrDefault(false)
     }
 }
+
+/**
+ * The wire bound for one request body, in bytes. Deliberately a constant, not
+ * an environment key: the limit is a product contract, not an operator dial.
+ */
+internal const val MAX_REQUEST_BYTES: Long = 200_000L
+
+private fun Throwable.requestLimitExceeded(): Boolean =
+    generateSequence(this) { it.cause }.any { it is PayloadTooLargeException }
+
+private fun ApplicationCall.requestTooLarge() =
+    problemDetail(
+        HttpStatusCode.PayloadTooLarge,
+        "REQUEST_TOO_LARGE",
+        "request body exceeds the allowed size",
+    )
 
 @Serializable
 data class HealthDto(val ok: Boolean = true)
