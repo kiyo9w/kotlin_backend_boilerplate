@@ -80,6 +80,22 @@ routing {
 The guard runs **before** the handler. A refused request never reaches product
 code. A new endpoint cannot forget the check.
 
+## Request bodies
+
+Every request body is bounded by `RequestBodyLimit` (`MAX_REQUEST_BYTES` in
+`Application.kt`). A declared `Content-Length` over the bound is refused before
+the handler runs; a chunked or lengthless body is cut while it streams, so an
+ignored JSON field cannot smuggle an oversized payload past a typed `receive`.
+
+The refusal must always answer `413 REQUEST_TOO_LARGE`. It cannot be trusted
+to surface as `PayloadTooLargeException`: the limiter proxies the body through
+a writer coroutine, and whether that exception reaches `StatusPages` directly
+or wrapped inside `BadRequestException` by the content converter is a
+scheduling race (observed on Ktor 3.5.1, roughly one request in five under
+parallel load). That is why the `BadRequestException` handler walks the cause
+chain instead of matching the thrown type - the same convention applies to any
+new handler that could mask a refusal inside another exception.
+
 ## Jobs and schedules
 
 - Work that leaves the request goes through the queue: `JobStore.enqueue` with a
