@@ -82,19 +82,22 @@ code. A new endpoint cannot forget the check.
 
 ## Request bodies
 
-Every request body is bounded by `RequestBodyLimit` (`MAX_REQUEST_BYTES` in
+Every request body is bounded by `RequestBodyBound` (`MAX_REQUEST_BYTES` in
 `Application.kt`). A declared `Content-Length` over the bound is refused before
-the handler runs; a chunked or lengthless body is cut while it streams, so an
-ignored JSON field cannot smuggle an oversized payload past a typed `receive`.
+the handler runs; a chunked or lengthless body is read inline at the receive
+pipeline's `Before` phase and refused at `limit + 1` bytes, so an ignored JSON
+field cannot smuggle an oversized payload past a typed `receive`.
 
-The refusal must always answer `413 REQUEST_TOO_LARGE`. It cannot be trusted
-to surface as `PayloadTooLargeException`: the limiter proxies the body through
-a writer coroutine, and whether that exception reaches `StatusPages` directly
-or wrapped inside `BadRequestException` by the content converter is a
-scheduling race (observed on Ktor 3.5.1, roughly one request in five under
-parallel load). That is why the `BadRequestException` handler walks the cause
-chain instead of matching the thrown type - the same convention applies to any
-new handler that could mask a refusal inside another exception.
+The refusal must always answer `413 REQUEST_TOO_LARGE`, which is why the bound
+is a local plugin rather than Ktor's `RequestBodyLimit`. Ktor's limiter proxies
+the body through a second writer coroutine, and whether `PayloadTooLargeException`
+reaches `StatusPages` directly or wrapped inside `BadRequestException` by the
+content converter is a scheduling race (observed on Ktor 3.5.1, roughly one
+request in five under parallel load). Counting the bytes in the request
+coroutine removes the second coroutine, so the refusal always surfaces
+unwrapped. Do not reintroduce `RequestBodyLimit`; if a future bound wraps
+exceptions differently, walk the cause chain in `StatusPages` instead of
+matching the thrown type.
 
 ## Jobs and schedules
 
