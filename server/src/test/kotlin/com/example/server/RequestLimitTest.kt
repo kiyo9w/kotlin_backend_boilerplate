@@ -30,11 +30,11 @@ import kotlin.test.assertEquals
 
 /**
  * The wire bound must answer 413 for every oversized body, including a
- * streamed one with no Content-Length. Ktor's RequestBodyLimit proxies the
- * body through a writer coroutine and the content converter may already be
- * reading when the cap trips, so the refusal can surface either directly or
- * wrapped in BadRequestException - a scheduling race, not a contract choice.
- * A burst of requests is what makes that race visible; one pass is not proof.
+ * streamed one with no Content-Length. The refusal is enforced by
+ * RequestBodyBound, which counts bytes in the request coroutine instead of
+ * Ktor's RequestBodyLimit writer coroutine - with the writer, a fast reader
+ * can observe a truncated stream as a parse failure instead of the limit
+ * exception. The burst is kept as a determinism guard: one pass is not proof.
  */
 class RequestLimitTest {
 

@@ -24,19 +24,27 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationCallPipeline
+import io.ktor.server.application.Hook
+import io.ktor.server.application.PipelineCall
+import io.ktor.server.application.createApplicationPlugin
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.PayloadTooLargeException
-import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.ApplicationReceivePipeline
+import io.ktor.server.request.contentLength
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -84,15 +92,13 @@ fun Application.module(
     }
     install(RequestId)
     // Every request body is bounded. A declared Content-Length is refused up
-    // front; a chunked body is cut while it streams. Ktor's limiter proxies
-    // the body through a writer coroutine, and the converter may already be
-    // reading when the cap trips, so the refusal can surface wrapped inside
-    // BadRequestException. The handlers below match on the cause chain, not
-    // on the exception type the pipeline happens to raise - do not collapse
-    // them back into one typed handler.
-    install(RequestBodyLimit) {
-        bodyLimit { MAX_REQUEST_BYTES }
-    }
+    // front; a streamed body is counted byte by byte in the request coroutine
+    // and refused as soon as it crosses the cap. The bound is a local plugin,
+    // not Ktor's RequestBodyLimit: Ktor's limiter proxies the body through a
+    // second writer coroutine, so the refusal can surface wrapped inside
+    // BadRequestException and come back 400 instead of 413 depending on
+    // scheduling. Counting inline keeps the 413 deterministic.
+    install(RequestBodyBound)
     install(StatusPages) {
         exception<ApiException> { call, cause ->
             call.respondProblem(call.problemDetail(cause.status, cause.code, cause.message))
@@ -100,14 +106,10 @@ fun Application.module(
         exception<PayloadTooLargeException> { call, _ ->
             call.respondProblem(call.requestTooLarge())
         }
-        exception<BadRequestException> { call, cause ->
-            if (cause.requestLimitExceeded()) {
-                call.respondProblem(call.requestTooLarge())
-            } else {
-                call.respondProblem(
-                    call.problemDetail(HttpStatusCode.BadRequest, "BAD_REQUEST", "request could not be understood"),
-                )
-            }
+        exception<BadRequestException> { call, _ ->
+            call.respondProblem(
+                call.problemDetail(HttpStatusCode.BadRequest, "BAD_REQUEST", "request could not be understood"),
+            )
         }
         exception<Throwable> { call, cause ->
             if (cause is kotlin.coroutines.cancellation.CancellationException) throw cause
@@ -196,8 +198,41 @@ fun dataSourceReadiness(dataSource: DataSource?): ReadinessProbe = ReadinessProb
  */
 internal const val MAX_REQUEST_BYTES: Long = 200_000L
 
-private fun Throwable.requestLimitExceeded(): Boolean =
-    generateSequence(this) { it.cause }.any { it is PayloadTooLargeException }
+/**
+ * Refuses bodies larger than [MAX_REQUEST_BYTES] before decoding.
+ *
+ * The bytes are counted in the request coroutine, not proxied through a
+ * second one: Ktor's RequestBodyLimit copies the body through a writer
+ * coroutine, and a fast reader can observe a truncated stream (a 400 parse
+ * error) instead of the limit exception. Reading at most `limit + 1` bytes
+ * inline keeps the 413 refusal deterministic for every content shape,
+ * including bodies without Content-Length.
+ */
+private object BoundedBodyReceive : Hook<suspend (PipelineCall, ByteReadChannel) -> ByteReadChannel> {
+    override fun install(
+        pipeline: ApplicationCallPipeline,
+        handler: suspend (PipelineCall, ByteReadChannel) -> ByteReadChannel,
+    ) {
+        pipeline.receivePipeline.intercept(ApplicationReceivePipeline.Before) {
+            val channel = subject as? ByteReadChannel ?: return@intercept
+            proceedWith(handler(context, channel))
+        }
+    }
+}
+
+private val RequestBodyBound = createApplicationPlugin("RequestBodyBound") {
+    on(BoundedBodyReceive) { call, body ->
+        val declared = call.request.contentLength()
+        if (declared != null && declared > MAX_REQUEST_BYTES) {
+            throw PayloadTooLargeException(MAX_REQUEST_BYTES)
+        }
+        val bytes = body.readRemaining(MAX_REQUEST_BYTES + 1).readByteArray()
+        if (bytes.size.toLong() > MAX_REQUEST_BYTES) {
+            throw PayloadTooLargeException(MAX_REQUEST_BYTES)
+        }
+        ByteReadChannel(bytes)
+    }
+}
 
 private fun ApplicationCall.requestTooLarge() =
     problemDetail(
