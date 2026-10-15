@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured on this machine, 2026-09-18, memory mode (blank `DATABASE_URL`),
+Measured on this machine in memory mode (blank `DATABASE_URL`),
 launched from the installed distribution (`:server:installDist`), timing from
 process start to the first `200` on `/health`, resident memory read 3 seconds
 after readiness with `ps -o rss=`.
@@ -17,7 +17,7 @@ it.
 
 **Method.** `DATABASE_URL= bin/server`, poll `/health` every 100 ms, then
 `ps -o rss=`. One run each; this is a smoke benchmark, not a statistically
-sound one. Re-measure before drawing conclusions, and record the date.
+sound one. Re-measure before drawing conclusions.
 
 **Comparison notes.** If startup time becomes a product constraint, measure
 compile-time DI alternatives (such as Micronaut) on the same host and add the
