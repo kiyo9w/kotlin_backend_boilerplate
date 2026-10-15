@@ -11,10 +11,8 @@ import java.util.concurrent.ConcurrentHashMap
  * charges a subject (device id, user id, api key) per kind per period and
  * throws when the cap is crossed.
  *
- * Lifted from the reference product's [com.example.server.DailyUsageGate] shape
- * . The template ships
- * the contract plus [MemorySpendGate] and [SqlSpendGate]; a product configures
- * the kinds and caps.
+ * The template ships the contract plus [MemorySpendGate] and [SqlSpendGate]; a
+ * product configures the kinds and caps.
  */
 interface SpendGate {
     /**

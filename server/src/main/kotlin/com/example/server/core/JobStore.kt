@@ -1,14 +1,12 @@
 package com.example.server.core
 
 /**
- * Generic durable job queue. The lease-and-fence mechanism is lifted verbatim
- * from the reference product's [com.example.server.Ledger] — claim with a lease, fence
- * every write by attempt number, reject stale writes with
- * [StaleClaimException].
+ * Generic durable job queue: claim with a lease, fence every write by attempt
+ * number, and reject stale writes with [StaleClaimException].
  *
- * A product's own store (the reference product's `Ledger`) extends or wraps this interface and
- * adds domain methods. The template ships this interface plus [MemoryJobStore]
- * and [SqlJobStore]; a product never re-implements the queue.
+ * A product's own store extends or wraps this interface and adds domain
+ * methods. The template ships this interface plus [MemoryJobStore] and
+ * [SqlJobStore]; a product never re-implements the queue.
  */
 interface JobStore {
 

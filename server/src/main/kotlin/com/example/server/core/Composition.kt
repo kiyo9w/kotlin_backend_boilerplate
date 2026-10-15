@@ -30,7 +30,7 @@ data class CoreComposition(
  * Build the core composition from the environment. A blank [env]("DATABASE_URL")
  * selects the explicit local-only memory mode; any other value selects SQL.
  *
- * @param env environment reader (the reference product: `ServerEnv::get`)
+ * @param env environment reader
  * @param registry job handler registry built by the product
  * @param spendGateFactory builds the spend gate for the selected mode
  */
@@ -67,8 +67,7 @@ fun coreCompositionFromEnv(
 }
 
 /**
- * Hikari + Flyway + Exposed connect for the core store. Lifted from the reference product's
- * `openDataSource` — the shape is kept exactly.
+ * Hikari + Flyway + Exposed connection setup for the core store.
  */
 fun openCoreDataSource(
     jdbcUrl: String,

@@ -19,8 +19,6 @@ it.
 `ps -o rss=`. One run each; this is a smoke benchmark, not a statistically
 sound one. Re-measure before drawing conclusions, and record the date.
 
-**The claim to beat.** Micronaut advertises fast startup through compile-time
-DI and no reflection. That is recorded as a **number to beat**, not a measured
-comparison; adopting the framework was explicitly out of scope for this work.
-If startup ever becomes a product constraint, measure Micronaut on the same
-host and add the row here.
+**Comparison notes.** If startup time becomes a product constraint, measure
+compile-time DI alternatives (such as Micronaut) on the same host and add the
+row here.

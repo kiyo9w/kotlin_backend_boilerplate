@@ -7,9 +7,7 @@ import kotlinx.coroutines.flow.Flow
  * interface; the template ships one OpenAI-compatible implementation. Keys
  * stay server-side only — never in a client build, never in source.
  *
- * Lifted from the reference product's `XaiChat` shape (the reference ranking: "depend: Ktor
- * client → api.x.ai. Keys stay server-side."). The interface is the seam; the
- * product owns the prompt and the schema.
+ * The interface is the seam; the product owns the prompt and the schema.
  */
 interface ModelGateway {
     /**

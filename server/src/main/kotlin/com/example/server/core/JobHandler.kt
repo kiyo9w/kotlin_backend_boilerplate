@@ -2,9 +2,8 @@ package com.example.server.core
 
 /**
  * What a [JobHandler] produces. [result] is the opaque product output stored
- * on the job row. [outcome] is a product-defined label (the reference product: GENERATED,
- * AUTHORED_FALLBACK). [fact] is an optional integer the store records beside
- * the job (the reference product: QA rejection count).
+ * on the job row. [outcome] is a product-defined label (for example, GENERATED
+ * or AUTHORED_FALLBACK). [fact] is an optional integer recorded beside the job.
  */
 data class JobResult(
     val result: String,
@@ -15,9 +14,6 @@ data class JobResult(
 /**
  * One job type, one handler. The registry routes a claimed [JobRecord] to the
  * handler registered for its [JobRecord.jobType].
- *
- * Lifted from the brief's seam: "A job-handler registry: a job type string
- * maps to a handler. A boilerplate cannot know what a job produces."
  */
 fun interface JobHandler {
     suspend fun handle(job: JobRecord): JobResult

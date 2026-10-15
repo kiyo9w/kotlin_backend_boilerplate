@@ -9,19 +9,16 @@ import kotlinx.coroutines.launch
  * Generic in-process worker. Claims one job per tick, routes it to the
  * registered [JobHandler], and writes the terminal state through [JobStore].
  *
- * The lease-and-fence mechanism is the same one the reference product's `SeedWorker` uses:
- * every write carries the claim's attempt number, and a stale attempt is
+ * Every write carries the claim's attempt number, and a stale attempt is
  * rejected with [StaleClaimException] rather than overwriting the live one.
  *
  * A handler that can outlive its lease runs under a heartbeat: while it is in
  * flight a background coroutine renews the claim's lease, so a long job is never
- * reclaimed mid-flight by another worker. That mechanism is lifted from
- * db-scheduler's heartbeat/dead-execution design (the lease timestamp is the
- * heartbeat; a missed renewal is what makes a run reclaimable).
+ * reclaimed mid-flight by another worker. The lease timestamp acts as the
+ * heartbeat, and a missed renewal makes a run reclaimable.
  *
- * A product that needs domain-specific fallback logic (the reference product's authored-pack
- * fallback) wraps this worker or implements its own; the template ships this
- * one as the default.
+ * A product that needs domain-specific fallback logic wraps this worker or
+ * implements its own; the template ships this one as the default.
  */
 class Worker(
     private val store: JobStore,

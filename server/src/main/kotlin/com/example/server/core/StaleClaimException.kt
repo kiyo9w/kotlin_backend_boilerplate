@@ -9,9 +9,5 @@ package com.example.server.core
  * writes must not land: without the fence, a stale attempt could commit
  * results and a terminal status after recovery, overwriting the live attempt's
  * work.
- *
- * Lifted verbatim from the reference product's [com.example.server.Ledger] — the
- * lease-and-fence queue is the best-designed thing in the server and the
- * boilerplate keeps it exactly.
  */
 class StaleClaimException(message: String) : RuntimeException(message)

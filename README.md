@@ -57,14 +57,3 @@ one has a test.
 Full detail: [`docs/conventions.md`](docs/conventions.md). Other docs:
 [`docs/topology.md`](docs/topology.md), [`docs/config.md`](docs/config.md),
 [`docs/deploy.md`](docs/deploy.md).
-
-## Provenance
-
-Extracted 2026-09-18 from a production Kotlin/Ktor service. Mechanisms that came
-from other studied systems are noted in the code where they live.
-
-2026-09-20: added the session shell, versioned documents, operation registry,
-SSE streaming, the durable spend gate, and `PUT` / `PATCH` route declarations
-for the Qoloa and Divini backend plans. Each addition ships with its tests; the
-seams table in [`docs/conventions.md`](docs/conventions.md) states what stays
-product-specific.

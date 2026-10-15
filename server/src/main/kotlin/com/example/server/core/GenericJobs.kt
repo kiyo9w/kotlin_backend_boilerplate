@@ -8,13 +8,8 @@ import org.jetbrains.exposed.v1.javatime.timestamp
  * needs: id, dedup key, job type, status, attempt fence, lease, result,
  * outcome, payload, and created_at.
  *
- * the reference product's existing `jobs` table (migration V1) already carries these columns
- * under slightly different names (`job_key` for `key`, `result_card_ids` for
- * `result`). V13__generic_jobs.sql adds `job_type` and `payload` so the
- * generic [SqlJobStore] can route and carry opaque input without a schema fork.
- *
- * A new product starts from this table directly; the reference product's product-specific
- * columns (l1, l2, seed_text, proficiency, qa_rejected) live beside them.
+ * V13__generic_jobs.sql adds `job_type` and `payload` so [SqlJobStore] can
+ * route and carry opaque input without a schema fork.
  */
 object GenericJobs : Table("jobs") {
     val id = uuid("id")
