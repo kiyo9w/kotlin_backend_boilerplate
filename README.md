@@ -26,6 +26,8 @@ export GRADLE_USER_HOME="$PWD/.gradle-home"
 
 DATABASE_URL=jdbc:postgresql://localhost:5432/example \
   ./gradlew :server:run         # against Postgres
+
+scripts/check.sh                # build the server image and check /health before merging
 ```
 
 ## Start a new product
