@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Builds the server image, starts it and waits for /health. Run it before merging
-# changes to the server or deploy files.
+# Runs JVM behavior checks, then builds the server image and waits for /health.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+./gradlew :server:test --console=plain
 
-name=boilerplate-check
+name=boilerplate-check-$$
 port=${CHECK_PORT:-18080}
 docker build -f deploy/Dockerfile -t boilerplate-server:check .
-docker rm -f "$name" >/dev/null 2>&1 || true
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 docker run -d --name "$name" -p "$port:8080" boilerplate-server:check >/dev/null
 for i in $(seq 1 30); do

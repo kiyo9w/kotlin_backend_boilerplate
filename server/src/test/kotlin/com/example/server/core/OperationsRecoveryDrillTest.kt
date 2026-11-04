@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.random.Random
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -31,6 +32,21 @@ class OperationsRecoveryDrillTest {
     @AfterTest
     fun closePool() {
         (ds as? AutoCloseable)?.close()
+    }
+
+    @Test
+    fun generatedDuplicateKeysPreserveTheFirstPendingJobAcrossStoreInstances() = runBlocking {
+        val random = Random(541)
+        val firstByKey = mutableMapOf<String, JobRecord>()
+        val scripts = listOf("東京", "العربية", "Đà Nẵng", "e\u0301")
+        repeat(128) { step ->
+            val key = "${scripts[random.nextInt(scripts.size)]}-${random.nextInt(12)}"
+            val job = SqlJobStore().enqueue(key, "example/echo", """{"step":$step}""")
+            val first = firstByKey.getOrPut(key) { job }
+            assertEquals(first.id, job.id)
+            assertEquals(first.payload, job.payload)
+            assertEquals(first, SqlJobStore().job(first.id))
+        }
     }
 
     @Test
