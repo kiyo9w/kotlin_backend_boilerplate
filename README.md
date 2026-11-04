@@ -27,8 +27,10 @@ export GRADLE_USER_HOME="$PWD/.gradle-home"
 DATABASE_URL=jdbc:postgresql://localhost:5432/example \
   ./gradlew :server:run         # against Postgres
 
-scripts/check.sh                # build the server image and check /health before merging
+scripts/check.sh                # run JVM tests, build the server image, and check /health
 ```
+
+The check includes generated queue invariants and the worker-recovery replay, then starts a uniquely named temporary container and removes it on exit. Deployment is verified by running the image, not by matching strings in deployment files.
 
 ## Start a new product
 
