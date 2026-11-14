@@ -58,11 +58,14 @@ or service; `StatusPages` renders it. Unhandled exceptions answer a fixed
 
 Intake verifies before it trusts. The verifier receives the **raw** body (a
 signature covers the bytes the provider sent; re-encoding a parsed body changes
-them) and returns a `VerifiedWebhook` only when the signature proves against it.
-`null` means refused, and the route answers a refusal — an unverified payload is
-never decoded and applied. `HmacWebhookVerifier` is the shared-secret shape
-every provider uses; a blank secret wires `FailClosedWebhooks`, so an endpoint
-that cannot verify refuses everything. The delivery identity (`VerifiedWebhook.eventId`)
+them) plus header lookup (`call.request::header`) and returns a `VerifiedWebhook`
+only when the signature proves against them. `null` means refused, and the route
+answers a refusal — an unverified payload is never decoded and applied.
+`StandardWebhooksVerifier` covers Polar and Resend (`webhook-*` or `svix-*`
+headers with replay-window enforcement and rotated `v1,` keys);
+`HmacWebhookVerifier` covers single-header shared-secret hooks (`X-Signature-256`
+by default). A blank secret wires `FailClosedWebhooks`, so an endpoint that
+cannot verify refuses everything. The delivery identity (`VerifiedWebhook.eventId`)
 is the dedupe key, so a replay collapses onto the same job.
 
 ## Route policy
@@ -198,7 +201,9 @@ the test cases in the report, not just the build status.
 | `JobHandler` | routing a `job_type` to work | the handlers |
 | `BatchGate<T>` | refuse-the-batch rule | the product's gate |
 | `ModelGateway` | one model-call contract, keys server-side | the prompt and schema (an OpenAI-compatible implementation ships here) |
-| `WebhookVerifier` | verify-before-trust intake, fail closed | the provider's secret and signature scheme |
+| `WebhookVerifier` | verify-before-trust intake, fail closed (`StandardWebhooksVerifier`, `HmacWebhookVerifier`) | the provider's secret and signature scheme |
+| `IdentityVerifier` | OIDC ID-token verification (`RS256` / `ES256`) over JWKS (`JwksIdentityVerifier`), fail closed | allowed issuers, audiences, and `azp` client IDs |
+| `IdentityStore` | `(issuer, subject)` bindings (`RFC 9700` safe), guest promotion, and immutable `owner_aliases` | conflict-resolution UX when a guest links an already-claimed account |
 | `ReadinessProbe` | readiness question | what "ready" means |
 | `RouteGuard` | policy enforcement | what "authenticated" means |
 | `SessionStore` | session persistence; token issue, rotation, and revocation live in `SessionService` | how a caller bootstraps to an owner id (device id, install key, verified provider subject) |

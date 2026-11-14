@@ -57,7 +57,9 @@ class PostgresIntegrationTest {
         // Reaching here at all means Flyway migrated a real Postgres.
         pool.connection.use { connection ->
             connection.autoCommit = true
-            connection.createStatement().use { it.execute("TRUNCATE TABLE jobs, schedules") }
+            connection.createStatement().use {
+                it.execute("TRUNCATE TABLE jobs, schedules, identities, owner_aliases")
+            }
         }
     }
 
@@ -142,5 +144,25 @@ class PostgresIntegrationTest {
         // A fresh store over the same database sees the renewal.
         assertEquals(null, SqlJobStore().claimPending(1_001, 1_000), "the renewal is durable")
         assertIs<JobRecord>(SqlJobStore().job(held.id))
+    }
+
+    @Test
+    fun concurrentSignInsForSameSubjectCreateExactlyOneOwnerOnRealPostgres() = runBlocking<Unit> {
+        val store = SqlIdentityStore()
+        val identity = VerifiedIdentity(
+            issuer = "https://appleid.apple.com",
+            subject = "pg-sub-${UUID.randomUUID()}",
+            email = "relay@privaterelay.appleid.com",
+            emailVerified = true,
+        )
+
+        val outcomes = (1..4).map { idx ->
+            async {
+                store.authenticateOrCreate(identity, { "owner-$idx-${UUID.randomUUID()}" }, now = 1_760_000_000_000L)
+            }
+        }.awaitAll()
+
+        assertEquals(1, outcomes.count { it.created }, "exactly one concurrent first sign-in creates the binding")
+        assertEquals(1, outcomes.map { it.ownerId }.toSet().size, "every caller resolves to the same canonical owner")
     }
 }
