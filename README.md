@@ -48,12 +48,15 @@ Typed bound configuration; the RFC 7807 `ProblemDetail` envelope with stable
 codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`, with
 `GET` / `POST` / `PUT` / `PATCH` / `DELETE` declarations) enforced before the
 handler; a session shell (opaque hashed access and refresh tokens, rotation,
-revocation, and a bearer guard that publishes the caller); owner-scoped
+revocation, and a bearer guard that publishes the caller); OIDC JWKS ID-token
+verification (`RS256` and `ES256`) plus `(issuer, subject)` identity bindings
+and guest `owner_aliases`; owner-scoped
 versioned documents with compare-and-set; an operation-id idempotency registry
 for long-running work; a durable lease-and-fence job queue; a durable scheduler
 that enqueues into that queue; a batch gate that refuses rather than ships a
 partial batch; a durable per-subject spend gate; SSE streaming (`respondSse`
-plus a streaming model gateway); a bounded prompt budget; webhook intake that
+plus a streaming model gateway); a bounded prompt budget; webhook intake
+(`StandardWebhooksVerifier` and `HmacWebhookVerifier`) that
 verifies the raw body and refuses by default; structured logs with a request id;
 `/health` and `/ready`. Every
 one has a test.

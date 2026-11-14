@@ -1,6 +1,7 @@
 package com.example.server
 
 import com.example.server.core.CoreComposition
+import com.example.server.core.FailClosedWebhooks
 import com.example.server.core.HmacWebhookVerifier
 import com.example.server.core.JobHandlerRegistry
 import com.example.server.core.MemoryJobStore
@@ -8,6 +9,8 @@ import com.example.server.core.MemoryScheduleStore
 import com.example.server.core.NoOpSpendGate
 import com.example.server.core.ProblemDetail
 import com.example.server.core.Scheduler
+import com.example.server.core.StandardWebhooksVerifier
+import com.example.server.core.WebhookVerifier
 import com.example.server.core.Worker
 import com.example.server.example.ExampleEchoHandler
 import com.example.server.example.ExampleJobTypes
@@ -23,11 +26,12 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.testing.testApplication
+import java.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.serialization.json.Json
 
 /**
  * Webhook intake end to end: a signed delivery is accepted and enqueued, an
@@ -58,17 +62,13 @@ class WebhookIntakeTest {
     }
 
     private fun withApp(
-        configureWebhooks: Boolean = true,
+        verifier: WebhookVerifier = HmacWebhookVerifier(provider = "example", secret = secret),
         test: suspend (HttpClient) -> Unit,
-    ) = testApplication {
+    ): Unit = testApplication {
         application {
             module(
                 memoryComposition(),
-                webhooks = if (configureWebhooks) {
-                    HmacWebhookVerifier(provider = "example", secret = secret)
-                } else {
-                    com.example.server.core.FailClosedWebhooks
-                },
+                webhooks = verifier,
             )
         }
         test(
@@ -88,7 +88,7 @@ class WebhookIntakeTest {
         }
 
     @Test
-    fun aSignedDeliveryIsAcceptedAndEnqueued() = withApp { client ->
+    fun aSignedDeliveryIsAcceptedAndEnqueued(): Unit = withApp { client ->
         val accepted = client.deliver(body, sign(body))
 
         assertEquals(HttpStatusCode.Accepted, accepted.status)
@@ -98,7 +98,7 @@ class WebhookIntakeTest {
     }
 
     @Test
-    fun aReplayedDeliveryCollapsesOntoTheSameJob() = withApp { client ->
+    fun aReplayedDeliveryCollapsesOntoTheSameJob(): Unit = withApp { client ->
         val first = client.deliver(body, sign(body)).body<JobAcceptedDto>().jobId
         val second = client.deliver(body, sign(body)).body<JobAcceptedDto>().jobId
 
@@ -106,24 +106,59 @@ class WebhookIntakeTest {
     }
 
     @Test
-    fun anUnsignedOrMisSignedDeliveryIsRefused() = withApp { client ->
+    fun standardWebhooksDeliveryDedupesByMessageIdOverHttp(): Unit {
+        val keyBytes = "0123456789abcdef0123456789abcdef".toByteArray(Charsets.UTF_8)
+        val whsec = "whsec_${Base64.getEncoder().encodeToString(keyBytes)}"
+        val nowSeconds = 1_760_000_000L
+        val mac = Mac.getInstance("HmacSHA256").apply {
+            init(SecretKeySpec(keyBytes, "HmacSHA256"))
+        }
+        val sig = "v1," + Base64.getEncoder().encodeToString(
+            mac.doFinal("msg_polar_42.$nowSeconds.$body".toByteArray(Charsets.UTF_8)),
+        )
+        val verifier = StandardWebhooksVerifier(
+            provider = "polar",
+            secret = whsec,
+            clock = { nowSeconds * 1_000L },
+        )
+
+        withApp(verifier = verifier) { client ->
+            val payload = this@WebhookIntakeTest.body
+            suspend fun postPolar() = client.post("/v1/example/webhooks") {
+                contentType(ContentType.Application.Json)
+                header("Webhook-Id", "msg_polar_42")
+                header("Webhook-Timestamp", nowSeconds.toString())
+                header("Webhook-Signature", sig)
+                setBody(payload)
+            }
+
+            val first = postPolar()
+            val second = postPolar()
+            assertEquals(HttpStatusCode.Accepted, first.status)
+            assertEquals(first.body<JobAcceptedDto>().jobId, second.body<JobAcceptedDto>().jobId)
+        }
+    }
+
+    @Test
+    fun anUnsignedOrMisSignedDeliveryIsRefused(): Unit = withApp { client ->
         val missing = client.deliver(body, null)
         assertEquals(HttpStatusCode.Unauthorized, missing.status)
         assertEquals("INVALID_WEBHOOK", missing.body<ProblemDetail>().code)
 
         val wrong = client.deliver(body, sign("""{"event":"other"}"""))
         assertEquals(HttpStatusCode.Unauthorized, wrong.status)
-        assertEquals("INVALID_WEBHOOK", wrong.body<ProblemDetail>().code)
+        assertEquals("INVALID_WEBHOOK", wrong.status.let { wrong.body<ProblemDetail>().code })
     }
 
     @Test
-    fun anUnconfiguredEndpointRefusesEvenAWellFormedSignature() = withApp(configureWebhooks = false) { client ->
-        val refused = client.deliver(body, sign(body))
+    fun anUnconfiguredEndpointRefusesEvenAWellFormedSignature(): Unit =
+        withApp(verifier = FailClosedWebhooks) { client ->
+            val refused = client.deliver(body, sign(body))
 
-        assertEquals(
-            HttpStatusCode.Unauthorized,
-            refused.status,
-            "no verifier means no trust, whatever the delivery looks like",
-        )
-    }
+            assertEquals(
+                HttpStatusCode.Unauthorized,
+                refused.status,
+                "no verifier means no trust, whatever the delivery looks like",
+            )
+        }
 }

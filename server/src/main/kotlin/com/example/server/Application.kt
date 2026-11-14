@@ -143,8 +143,7 @@ fun Application.module(
         // apply an unverified body — a refusal is a refusal.
         post("/v1/example/webhooks", RoutePolicy.PUBLIC) {
             val raw = call.receiveText()
-            val signature = call.request.header("X-Signature-256")
-            val verified = webhooks.verify(raw, signature)
+            val verified = webhooks.verify(raw, call.request::header)
                 ?: throw ApiException(HttpStatusCode.Unauthorized, "INVALID_WEBHOOK", "webhook rejected")
             val job = composition.jobStore.enqueue(
                 key = "webhook:${verified.provider}:${verified.eventId}",
