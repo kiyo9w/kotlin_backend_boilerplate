@@ -91,6 +91,15 @@ fun openCoreDataSource(
         .dataSource(dataSource)
         .load()
         .migrate()
-    org.jetbrains.exposed.v1.jdbc.Database.connect(dataSource)
+    val db = org.jetbrains.exposed.v1.jdbc.Database.connect(dataSource)
+    // Exposed caches JDBC DatabaseMetaData flags (including supportsSelectForUpdate)
+    // with LazyThreadSafetyMode.NONE; initialize them once on the startup thread so
+    // the first burst of concurrent FOR UPDATE queries on Dispatchers.IO cannot race.
+    org.jetbrains.exposed.v1.jdbc.transactions.transaction(db) {
+        db.supportsSelectForUpdate
+        db.version
+        db.vendor
+        db.identifierManager
+    }
     return dataSource
 }

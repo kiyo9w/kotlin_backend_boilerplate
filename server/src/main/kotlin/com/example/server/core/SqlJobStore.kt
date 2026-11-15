@@ -13,7 +13,6 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.inTopLevelSuspendTransaction
 import org.jetbrains.exposed.v1.jdbc.update
 import java.time.Instant
-import java.util.UUID
 import kotlin.uuid.Uuid
 
 /**
@@ -28,60 +27,75 @@ private const val CLAIM_CANDIDATES: Int = 8
  * mechanism is lifted verbatim from the reference product's `SqlLedger.claimPending` and
  * `SqlLedger.finish` — the best-designed thing in the server.
  *
- * A product that needs domain columns beside the generic ones (the reference product's l1, l2,
- * seed_text) extends this store or wraps it; the template ships this one.
+ * Also serves as the transactional outbox via [enqueueInTransaction] paired with
+ * [runInCoreTransaction], so a domain write and its async side-effect commit or
+ * roll back together in one database transaction.
  */
 class SqlJobStore : JobStore {
 
     override suspend fun enqueue(key: String, jobType: String, payload: String, userId: String?): JobRecord =
         coreDbQuery {
-            val existing = GenericJobs.selectAll()
-                .where { GenericJobs.key eq key }
-                .firstOrNull()
-            if (existing != null) {
-                val status = JobState.valueOf(existing[GenericJobs.status])
-                if (status == JobState.FAILED || status == JobState.STALE) {
-                    GenericJobs.update({ GenericJobs.id eq existing[GenericJobs.id] }) {
-                        it[GenericJobs.status] = JobState.PENDING.name
-                        it[attempt] = existing[GenericJobs.attempt] + 1
-                        it[lastError] = null
-                        it[GenericJobs.payload] = payload
-                    }
-                    return@coreDbQuery existing.toRecord().copy(
-                        status = JobState.PENDING,
-                        attempt = existing[GenericJobs.attempt] + 1,
-                        payload = payload,
-                    )
-                }
-                return@coreDbQuery existing.toRecord()
-            }
-            val jobId = Uuid.random()
-            val now = Instant.now()
-            GenericJobs.insert {
-                it[id] = jobId
-                it[GenericJobs.userId] = userId?.let { u -> runCatching { Uuid.parse(u) }.getOrNull() }
-                it[GenericJobs.key] = key
-                it[GenericJobs.jobType] = jobType
-                it[status] = JobState.PENDING.name
-                it[attempt] = 0
-                it[result] = ""
-                it[GenericJobs.payload] = payload
-                it[createdAt] = now
-            }
-            JobRecord(
-                id = jobId.toString(),
-                key = key,
-                jobType = jobType,
-                status = JobState.PENDING,
-                attempt = 0,
-                leaseExpiresAtEpochMs = null,
-                lastError = null,
-                result = null,
-                outcome = null,
-                payload = payload,
-                createdAtEpochMs = now.toEpochMilli(),
-            )
+            enqueueInTransaction(this, key, jobType, payload, userId)
         }
+
+    /**
+     * Enqueue a durable outbox job inside an open [JdbcTransaction] so the
+     * surrounding business write and its async job row commit atomically.
+     */
+    fun enqueueInTransaction(
+        tx: JdbcTransaction,
+        key: String,
+        jobType: String,
+        payload: String,
+        userId: String? = null,
+    ): JobRecord = with(tx) {
+        val existing = GenericJobs.selectAll()
+            .where { GenericJobs.key eq key }
+            .firstOrNull()
+        if (existing != null) {
+            val status = JobState.valueOf(existing[GenericJobs.status])
+            if (status == JobState.FAILED || status == JobState.STALE) {
+                GenericJobs.update({ GenericJobs.id eq existing[GenericJobs.id] }) {
+                    it[GenericJobs.status] = JobState.PENDING.name
+                    it[attempt] = existing[GenericJobs.attempt] + 1
+                    it[lastError] = null
+                    it[GenericJobs.payload] = payload
+                }
+                return@with existing.toRecord().copy(
+                    status = JobState.PENDING,
+                    attempt = existing[GenericJobs.attempt] + 1,
+                    payload = payload,
+                )
+            }
+            return@with existing.toRecord()
+        }
+        val jobId = Uuid.random()
+        val now = Instant.now()
+        GenericJobs.insert {
+            it[id] = jobId
+            it[GenericJobs.userId] = userId?.let { u -> runCatching { Uuid.parse(u) }.getOrNull() }
+            it[GenericJobs.key] = key
+            it[GenericJobs.jobType] = jobType
+            it[status] = JobState.PENDING.name
+            it[attempt] = 0
+            it[result] = ""
+            it[GenericJobs.payload] = payload
+            it[createdAt] = now
+        }
+        JobRecord(
+            id = jobId.toString(),
+            key = key,
+            jobType = jobType,
+            status = JobState.PENDING,
+            attempt = 0,
+            leaseExpiresAtEpochMs = null,
+            lastError = null,
+            result = null,
+            outcome = null,
+            payload = payload,
+            createdAtEpochMs = now.toEpochMilli(),
+        )
+    }
 
     override suspend fun claimPending(nowEpochMs: Long, leaseMs: Long): JobRecord? = coreDbQuery {
         val now = Instant.ofEpochMilli(nowEpochMs)
@@ -125,7 +139,7 @@ class SqlJobStore : JobStore {
                     (GenericJobs.attempt eq attempt) and
                     (GenericJobs.status eq JobState.RUNNING.name)
             }) {
-                it[leaseExpiresAt] = java.time.Instant.ofEpochMilli(nowEpochMs + leaseMs)
+                it[leaseExpiresAt] = Instant.ofEpochMilli(nowEpochMs + leaseMs)
             }
             if (updated == 0) {
                 val exists = GenericJobs.selectAll().where { GenericJobs.id eq uuid }.firstOrNull()
@@ -184,6 +198,12 @@ class SqlJobStore : JobStore {
         createdAtEpochMs = this[GenericJobs.createdAt].toEpochMilli(),
     )
 }
+
+/**
+ * Execute a multi-table mutation (for example, a domain write paired with
+ * [SqlJobStore.enqueueInTransaction]) inside one top-level JDBC transaction.
+ */
+suspend fun <T> runInCoreTransaction(block: suspend JdbcTransaction.() -> T): T = coreDbQuery(block)
 
 internal suspend fun <T> coreDbQuery(block: suspend JdbcTransaction.() -> T): T =
     withContext(Dispatchers.IO) {

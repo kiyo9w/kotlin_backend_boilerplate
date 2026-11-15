@@ -59,8 +59,10 @@ class PostgresIntegrationTest {
             connection.autoCommit = true
             connection.createStatement().use {
                 it.execute(
-                    "TRUNCATE TABLE jobs, schedules, identities, owner_aliases, " +
-                        "email_codes, webhook_events, entitlements, credit_grants, email_suppressions, ai_usage_log",
+                    "TRUNCATE TABLE jobs, schedules, sessions, identities, owner_aliases, " +
+                        "email_codes, webhook_events, entitlements, credit_grants, " +
+                        "credit_reservations, credit_ledger, workspaces, workspace_members, " +
+                        "workspace_invites, api_keys, audit_events, email_suppressions, ai_usage_log",
                 )
             }
         }
@@ -197,5 +199,57 @@ class PostgresIntegrationTest {
         }.awaitAll()
 
         assertEquals(1, checks.count { it == EmailCodeCheck.Verified }, "a 6-digit OTP code may be consumed only once")
+    }
+
+    @Test
+    fun concurrentCreditReservationsNeverOverbookBalanceOnRealPostgres() = runBlocking<Unit> {
+        val credits = SqlCreditBalanceStore()
+        val owner = "pg-hold-${UUID.randomUUID()}"
+        val now = 1_760_000_000_000L
+        credits.grant(ownerId = owner, sourceRef = "pack-hold-$owner", units = 100L, expiresAt = now + 86_400_000L, now = now)
+
+        val holds = (1..4).map {
+            async { credits.reserve(ownerId = owner, units = 60L, ttlMs = 60_000L, now = now + 10L) }
+        }.awaitAll().filterNotNull()
+
+        assertEquals(1, holds.size, "only one 60-unit hold fits inside a 100-unit balance")
+        assertEquals(40L, credits.available(owner, now + 10L))
+        assertEquals(
+            CreditCommitOutcome.COMMITTED,
+            credits.commitReservation(holds.single().id, actualUnits = 25L, now = now + 20L),
+        )
+        assertEquals(75L, credits.available(owner, now + 20L))
+    }
+
+    @Test
+    fun concurrentPersonalWorkspaceCreationYieldsSingleWorkspaceOnRealPostgres() = runBlocking<Unit> {
+        val workspaces = SqlWorkspaceStore()
+        val owner = "pg-ws-${UUID.randomUUID()}"
+
+        val created = (1..4).map {
+            async { workspaces.ensurePersonalWorkspace(ownerId = owner, now = 1_760_000_000_000L) }
+        }.awaitAll()
+
+        assertEquals(1, created.map { it.id }.toSet().size, "every concurrent login resolves to one personal workspace")
+        assertEquals(WorkspaceRole.OWNER, workspaces.memberRole(created.first().id, owner))
+    }
+
+    @Test
+    fun refreshReuseOutsideGraceRevokesTokenFamilyOnRealPostgres() = runBlocking<Unit> {
+        var now = 1_760_000_000_000L
+        val sessions = SessionService(
+            store = SqlSessionStore(),
+            ttl = TokenTtl(reuseGraceMs = 5_000L),
+            clock = { now },
+        )
+        val owner = "pg-sess-${UUID.randomUUID()}"
+        val first = sessions.issue(ownerId = owner, deviceId = "laptop")
+        val otherDevice = sessions.issue(ownerId = owner, deviceId = "phone")
+        val rotated = sessions.refresh(first.refreshToken)!!
+
+        now += 6_000L
+        assertEquals(null, sessions.refresh(first.refreshToken))
+        assertEquals(null, sessions.authenticate(rotated.accessToken), "stolen family is revoked")
+        assertEquals(owner, sessions.authenticate(otherDevice.accessToken)?.ownerId, "other device survives")
     }
 }
