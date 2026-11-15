@@ -520,7 +520,7 @@ class ProductionSaasHardeningTest {
                 createdAt = disputedAt - 150 * dayMs,
             ),
         )
-        // Too recent (30 days prior) and support impersonation action on different IP/device -> excluded.
+        // Too recent (30 days prior) and support impersonation action (even with matching IP/device!) -> excluded.
         store.append(
             AuditEventRow(
                 ownerId = owner,
@@ -537,19 +537,19 @@ class ProductionSaasHardeningTest {
                 actorId = owner,
                 impersonatorId = "support-eng-1",
                 action = "support.view",
-                ipAddress = "10.0.0.5",
-                deviceId = "ops-console",
+                ipAddress = "198.51.100.77",
+                deviceId = "mac-1",
                 createdAt = disputedAt - 180 * dayMs,
             ),
         )
 
-        val evidence = store.findCompellingEvidence(
+        val evidence = store.findVisaCompellingEvidence(
             ownerId = owner,
             disputedAt = disputedAt,
             ipAddress = "198.51.100.77",
             deviceId = "mac-1",
         )
-        assertEquals(2, evidence.size, "Visa CE 3.0 matches undisputed events 120..365 days before dispute")
+        assertEquals(2, evidence.size, "Visa CE 3.0 matches direct customer events 120..365 days before dispute")
         assertEquals(1, store.forOwner(owner).count { it.impersonatorId == "support-eng-1" })
     }
 }

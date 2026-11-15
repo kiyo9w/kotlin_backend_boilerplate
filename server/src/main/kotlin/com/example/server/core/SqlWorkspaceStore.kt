@@ -319,7 +319,7 @@ class SqlWorkspaceStore : WorkspaceStore {
         ttlMs: Long,
         now: Long,
     ): IssuedWorkspaceInvite {
-        val cleanEmail = normalizeInviteEmail(invitedEmail)
+        val cleanEmail = normalizeEmailAddress(invitedEmail)
         require(invitedBy.isNotBlank()) { "invitedBy must not be blank" }
         require(ttlMs > 0L) { "ttlMs must be positive" }
 
@@ -327,7 +327,7 @@ class SqlWorkspaceStore : WorkspaceStore {
             val wsExists = Workspaces.selectAll().where { Workspaces.id eq workspaceId }.firstOrNull() != null
             require(wsExists) { "workspace $workspaceId not found" }
 
-            val rawToken = mintInviteToken(random)
+            val rawToken = randomBase64UrlToken(random)
             val inviteId = UUID.randomUUID().toString()
             val expiresAt = now + ttlMs
             WorkspaceInvites.insert {
@@ -335,7 +335,7 @@ class SqlWorkspaceStore : WorkspaceStore {
                 it[WorkspaceInvites.workspaceId] = workspaceId
                 it[WorkspaceInvites.invitedEmail] = cleanEmail
                 it[WorkspaceInvites.role] = role.name
-                it[tokenHash] = sha256WorkspaceHex(rawToken)
+                it[tokenHash] = sha256Hex(rawToken)
                 it[WorkspaceInvites.invitedBy] = invitedBy
                 it[WorkspaceInvites.expiresAt] = expiresAt
                 it[acceptedAt] = null
@@ -366,8 +366,8 @@ class SqlWorkspaceStore : WorkspaceStore {
         val cleanToken = rawToken.trim()
         if (cleanToken.isEmpty()) return InviteAcceptResult(InviteAcceptOutcome.INVALID_OR_EXPIRED)
         require(acceptingOwnerId.isNotBlank()) { "acceptingOwnerId must not be blank" }
-        val normalizedEmail = normalizeInviteEmail(verifiedEmail)
-        val hash = sha256WorkspaceHex(cleanToken)
+        val normalizedEmail = normalizeEmailAddress(verifiedEmail)
+        val hash = sha256Hex(cleanToken)
 
         return coreDbQuery {
             val inviteRow = WorkspaceInvites.selectAll()

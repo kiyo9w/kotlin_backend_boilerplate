@@ -1,6 +1,5 @@
 package com.example.server.core
 
-import java.security.MessageDigest
 import java.util.UUID
 
 /**
@@ -10,8 +9,7 @@ import java.util.UUID
  * - [impersonatorId] records the human operator during bounded support impersonation
  *   (`RFC 8693` `act` claim) so support mutations are never confused with customer actions.
  * - [ipAddress] and [deviceId] retain the session footprint needed to contest
- *   friendly-fraud chargebacks under Visa Compelling Evidence 3.0 (`CE 3.0`,
- *   matching undisputed usage `120..365` days prior to the disputed charge).
+ *   friendly-fraud chargebacks (such as Visa Compelling Evidence 3.0).
  */
 data class AuditEventRow(
     val id: String = UUID.randomUUID().toString(),
@@ -35,7 +33,7 @@ data class AuditEventRow(
 }
 
 /**
- * Append-only audit log with Visa `CE 3.0` evidence lookup and privacy-erasure
+ * Append-only audit log with customer session-footprint lookup and privacy-erasure
  * pseudonymization (`GDPR` Art. 17 / Vietnam `Decree 356/2025/ND-CP`).
  */
 interface AuditLogStore {
@@ -47,17 +45,15 @@ interface AuditLogStore {
     suspend fun forOwner(ownerId: String, limit: Int = 100): List<AuditEventRow>
 
     /**
-     * Find prior events for [ownerId] inside the Visa Compelling Evidence 3.0
-     * window (`[disputedAt - maxAgeDays, disputedAt - minAgeDays]`, `120..365`
-     * days by default) whose [ipAddress] or [deviceId] matches the disputed session.
+     * Find direct customer events (`impersonatorId == null`) for [ownerId] inside
+     * `[fromEpochMs, toEpochMs]` whose [ipAddress] or [deviceId] matches.
      */
-    suspend fun findCompellingEvidence(
+    suspend fun findMatchingFootprint(
         ownerId: String,
-        disputedAt: Long,
+        fromEpochMs: Long,
+        toEpochMs: Long,
         ipAddress: String? = null,
         deviceId: String? = null,
-        minAgeDays: Int = 120,
-        maxAgeDays: Int = 365,
     ): List<AuditEventRow>
 
     /**
@@ -66,6 +62,34 @@ interface AuditLogStore {
      * security/billing timelines stay intact after account deletion without retaining PII.
      */
     suspend fun pseudonymizeForOwner(ownerId: String): Int
+}
+
+const val VISA_CE3_MIN_AGE_DAYS: Int = 120
+const val VISA_CE3_MAX_AGE_DAYS: Int = 365
+private const val AUDIT_DAY_MS: Long = 86_400_000L
+
+/**
+ * Convenience query over [AuditLogStore.findMatchingFootprint] for Visa Compelling
+ * Evidence 3.0 (`120..365` days prior to [disputedAt], excluding support impersonation).
+ */
+suspend fun AuditLogStore.findVisaCompellingEvidence(
+    ownerId: String,
+    disputedAt: Long,
+    ipAddress: String? = null,
+    deviceId: String? = null,
+    minAgeDays: Int = VISA_CE3_MIN_AGE_DAYS,
+    maxAgeDays: Int = VISA_CE3_MAX_AGE_DAYS,
+): List<AuditEventRow> {
+    require(minAgeDays >= 0 && maxAgeDays >= minAgeDays) {
+        "invalid evidence age window: $minAgeDays..$maxAgeDays"
+    }
+    return findMatchingFootprint(
+        ownerId = ownerId,
+        fromEpochMs = disputedAt - maxAgeDays * AUDIT_DAY_MS,
+        toEpochMs = disputedAt - minAgeDays * AUDIT_DAY_MS,
+        ipAddress = ipAddress,
+        deviceId = deviceId,
+    )
 }
 
 /** In-memory [AuditLogStore] for local-only mode and fast unit tests. */
@@ -99,25 +123,23 @@ class MemoryAuditLogStore : AuditLogStore {
         }
     }
 
-    override suspend fun findCompellingEvidence(
+    override suspend fun findMatchingFootprint(
         ownerId: String,
-        disputedAt: Long,
+        fromEpochMs: Long,
+        toEpochMs: Long,
         ipAddress: String?,
         deviceId: String?,
-        minAgeDays: Int,
-        maxAgeDays: Int,
     ): List<AuditEventRow> {
+        require(toEpochMs >= fromEpochMs) { "toEpochMs must be >= fromEpochMs" }
         val cleanIp = ipAddress?.trim()?.takeIf { it.isNotEmpty() }
         val cleanDevice = deviceId?.trim()?.takeIf { it.isNotEmpty() }
         if (cleanIp == null && cleanDevice == null) return emptyList()
-        require(minAgeDays >= 0 && maxAgeDays >= minAgeDays) { "invalid CE 3.0 window" }
 
-        val windowStart = disputedAt - maxAgeDays * DAY_MS
-        val windowEnd = disputedAt - minAgeDays * DAY_MS
         return synchronized(lock) {
             events.filter { row ->
                 row.ownerId == ownerId &&
-                    row.createdAt in windowStart..windowEnd &&
+                    row.impersonatorId == null &&
+                    row.createdAt in fromEpochMs..toEpochMs &&
                     ((cleanIp != null && row.ipAddress == cleanIp) ||
                         (cleanDevice != null && row.deviceId == cleanDevice))
             }.sortedByDescending { it.createdAt }
@@ -126,6 +148,7 @@ class MemoryAuditLogStore : AuditLogStore {
 
     override suspend fun pseudonymizeForOwner(ownerId: String): Int {
         val tombstone = deletedActorPseudonym(ownerId)
+        if (ownerId == tombstone) return 0
         return synchronized(lock) {
             var count = 0
             for (idx in events.indices) {
@@ -145,16 +168,7 @@ class MemoryAuditLogStore : AuditLogStore {
             count
         }
     }
-
-    private companion object {
-        const val DAY_MS: Long = 86_400_000L
-    }
 }
 
-internal fun deletedActorPseudonym(ownerId: String): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-        .digest(ownerId.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
-        .take(12)
-    return "deleted:$digest"
-}
+internal fun deletedActorPseudonym(ownerId: String): String =
+    "deleted:${sha256Hex(ownerId).take(12)}"

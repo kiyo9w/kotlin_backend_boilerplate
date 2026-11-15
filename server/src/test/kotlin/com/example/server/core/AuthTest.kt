@@ -147,6 +147,25 @@ class AuthTest {
         }
     }
 
+    @Test
+    fun authenticateTouchesImmediatelyThenThrottlesWithinWindow() = runBlocking<Unit> {
+        val store = MemorySessionStore()
+        val service = SessionService(store, touchMinIntervalMs = 60_000L) { now }
+        val tokens = service.issue(ownerId = "owner-touch", deviceId = "device-1")
+
+        assertNotNull(service.authenticate(tokens.accessToken))
+        val firstTouch = service.activeSessions("owner-touch").single().lastUsedAt
+        assertEquals(now, firstTouch)
+
+        now += 15_000L
+        assertNotNull(service.authenticate(tokens.accessToken))
+        assertEquals(firstTouch, service.activeSessions("owner-touch").single().lastUsedAt)
+
+        now += 45_000L
+        assertNotNull(service.authenticate(tokens.accessToken))
+        assertEquals(now, service.activeSessions("owner-touch").single().lastUsedAt)
+    }
+
     // ---- BearerRouteGuard, through a real testApplication and the real route policy plugin ----
 
     @Test

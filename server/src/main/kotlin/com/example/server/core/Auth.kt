@@ -5,9 +5,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
 import io.ktor.util.AttributeKey
-import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -222,10 +220,15 @@ class MemorySessionStore : SessionStore {
 class SessionService(
     private val store: SessionStore,
     private val ttl: TokenTtl = TokenTtl(),
+    private val touchMinIntervalMs: Long = DEFAULT_TOUCH_MIN_INTERVAL_MS,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val random = SecureRandom()
+
+    init {
+        require(touchMinIntervalMs >= 0L) { "touchMinIntervalMs must be >= 0" }
+    }
 
     /** Mint and persist a pair. The raw tokens leave here exactly once. */
     suspend fun issue(
@@ -236,16 +239,16 @@ class SessionService(
         sudoOnIssue: Boolean = false,
     ): SessionTokens {
         val now = clock()
-        val access = newToken()
-        val refresh = newToken()
+        val access = randomBase64UrlToken(random)
+        val refresh = randomBase64UrlToken(random)
         val rowId = UUID.randomUUID().toString()
         store.insert(
             SessionRow(
                 id = rowId,
                 ownerId = ownerId,
                 deviceId = deviceId,
-                accessHash = hash(access),
-                refreshHash = hash(refresh),
+                accessHash = sha256Hex(access),
+                refreshHash = sha256Hex(refresh),
                 accessExpiresAt = now + ttl.accessMs,
                 refreshExpiresAt = now + ttl.refreshMs,
                 createdAt = now,
@@ -261,9 +264,12 @@ class SessionService(
     /** Resolves a live access token. Returns null for unknown, expired, or revoked. */
     suspend fun authenticate(accessToken: String): AuthSubject? {
         val now = clock()
-        val row = store.byAccessHash(hash(accessToken)) ?: return null
+        val row = store.byAccessHash(sha256Hex(accessToken)) ?: return null
         if (row.revokedAt != null || row.accessExpiresAt <= now) return null
-        store.touch(row.id, now)
+        val previousTouch = row.lastUsedAt
+        if (previousTouch == null || (now - previousTouch) >= touchMinIntervalMs) {
+            store.touch(row.id, now)
+        }
         return AuthSubject(
             ownerId = row.ownerId,
             deviceId = row.deviceId,
@@ -282,7 +288,7 @@ class SessionService(
         userAgent: String? = null,
     ): SessionTokens? {
         val now = clock()
-        val current = store.byRefreshHash(hash(refreshToken)) ?: return null
+        val current = store.byRefreshHash(sha256Hex(refreshToken)) ?: return null
         if (current.refreshExpiresAt <= now) return null
         if (current.revokedAt != null) {
             val rotatedAt = current.rotatedAt
@@ -295,14 +301,14 @@ class SessionService(
             }
             return null
         }
-        val access = newToken()
-        val refresh = newToken()
+        val access = randomBase64UrlToken(random)
+        val refresh = randomBase64UrlToken(random)
         val next = SessionRow(
             id = UUID.randomUUID().toString(),
             ownerId = current.ownerId,
             deviceId = current.deviceId,
-            accessHash = hash(access),
-            refreshHash = hash(refresh),
+            accessHash = sha256Hex(access),
+            refreshHash = sha256Hex(refresh),
             accessExpiresAt = now + ttl.accessMs,
             refreshExpiresAt = now + ttl.refreshMs,
             rotatedFrom = current.id,
@@ -326,7 +332,7 @@ class SessionService(
      * token is unknown or its row is already revoked.
      */
     suspend fun revoke(accessToken: String): Boolean {
-        val row = store.byAccessHash(hash(accessToken)) ?: return false
+        val row = store.byAccessHash(sha256Hex(accessToken)) ?: return false
         if (row.revokedAt != null) return false
         store.revoke(row.id, clock())
         return true
@@ -352,16 +358,9 @@ class SessionService(
         store.revokeAll(ownerId, clock())
     }
 
-    private fun newToken(): String {
-        val bytes = ByteArray(32)
-        random.nextBytes(bytes)
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    companion object {
+        const val DEFAULT_TOUCH_MIN_INTERVAL_MS: Long = 60_000L
     }
-
-    private fun hash(token: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(token.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
 }
 
 /**

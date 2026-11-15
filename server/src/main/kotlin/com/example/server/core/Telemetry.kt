@@ -97,7 +97,7 @@ class PostHogAnalyticsSink(
     }
 
     companion object {
-        const val DEFAULT_HOST: String = "https://us.i.posthog.com"
+        const val DEFAULT_HOST: String = "https://eu.i.posthog.com"
     }
 }
 
