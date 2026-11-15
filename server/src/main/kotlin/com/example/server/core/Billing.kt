@@ -39,6 +39,8 @@ data class EntitlementUpsert(
     val quantity: Int = 1,
     val currentPeriodEnd: Long,
     val graceUntil: Long? = null,
+    val cancelAtPeriodEnd: Boolean = false,
+    val sourceTimestamp: Long? = null,
 ) {
     init {
         require(externalSubId.isNotBlank()) { "externalSubId must not be blank" }
@@ -48,7 +50,7 @@ data class EntitlementUpsert(
     }
 }
 
-/** Persisted first-party subscription state (`V8__commercial_backbone.sql`). */
+/** Persisted first-party subscription state (`V8__commercial_backbone.sql` + `V9__production_saas_hardening.sql`). */
 data class EntitlementRow(
     val provider: String,
     val externalSubId: String,
@@ -60,6 +62,8 @@ data class EntitlementRow(
     val graceUntil: Long?,
     val lastEventId: String,
     val updatedAt: Long,
+    val cancelAtPeriodEnd: Boolean = false,
+    val sourceTimestamp: Long? = null,
 ) {
     /**
      * Whether this subscription grants access at [now].
@@ -67,7 +71,7 @@ data class EntitlementRow(
      * - `TRIALING`, `ACTIVE`, and `CANCELED` grant access until [currentPeriodEnd]
      *   (canceling auto-renew never strips already-paid time).
      * - `PAST_DUE` and `GRACE_PERIOD` grant access until `graceUntil ?: currentPeriodEnd`.
-     * - `REVOKED` (refund or Family Sharing removal) and `EXPIRED` cut access immediately.
+     * - `REVOKED` (refund, dispute, or Family Sharing removal) and `EXPIRED` cut access immediately.
      */
     fun isEntitledAt(now: Long): Boolean = when (status) {
         SubscriptionStatus.TRIALING,
@@ -80,33 +84,56 @@ data class EntitlementRow(
     }
 }
 
-/** Whether a webhook event mutated state or was skipped because `(provider, eventId)` already landed. */
+/**
+ * Outcome of applying an inbound billing event:
+ * - [APPLIED]: recorded and mutated (or acknowledged when `upsert == null`)
+ * - [DUPLICATE]: `(provider, eventId)` was already processed
+ * - [STALE_IGNORED]: `(provider, eventId)` arrived out of order with a smaller
+ *   [EntitlementUpsert.sourceTimestamp] than the stored subscription state
+ */
 enum class WebhookApplyOutcome {
     APPLIED,
     DUPLICATE,
+    STALE_IGNORED,
 }
+
+/** Persisted webhook delivery record for replay inspection and reconciliation. */
+data class StoredWebhookEvent(
+    val provider: String,
+    val eventId: String,
+    val receivedAt: Long,
+    val rawPayload: String? = null,
+    val outcome: WebhookApplyOutcome? = null,
+)
 
 /**
  * First-party subscription ledger paired with atomic `(provider, eventId)`
- * webhook deduplication.
+ * webhook deduplication, raw payload archival, and monotonic `sourceTimestamp`
+ * out-of-order fencing.
  *
- * Plan state changes only from verified provider events, never from a client
- * redirect after checkout. Passing `identityStore::canonicalOwner` as the owner
- * resolver ensures renewal webhooks carrying an older guest `appAccountToken`
- * or `obfuscatedAccountId` resolve to the merged canonical owner.
+ * Plan state changes only from verified provider events or convergent server-to-server
+ * pulls, never from an unverified client redirect after checkout. Passing
+ * `identityStore::canonicalOwner` as the owner resolver ensures renewal webhooks
+ * carrying an older guest `appAccountToken` or `obfuscatedAccountId` resolve to
+ * the merged canonical owner.
  */
 interface EntitlementStore {
     /**
-     * Record `(provider, eventId)` and apply [upsert] (when non-null) atomically.
-     * Replays of the same `(provider, eventId)` return [WebhookApplyOutcome.DUPLICATE]
-     * without overwriting newer state.
+     * Record `(provider, eventId)` (plus optional [rawPayload]) and apply [upsert]
+     * atomically. Replays of the same `(provider, eventId)` return
+     * [WebhookApplyOutcome.DUPLICATE]; out-of-order events older than the stored
+     * `sourceTimestamp` return [WebhookApplyOutcome.STALE_IGNORED] without regressing state.
      */
     suspend fun applyWebhookEvent(
         provider: String,
         eventId: String,
         now: Long = System.currentTimeMillis(),
         upsert: EntitlementUpsert? = null,
+        rawPayload: String? = null,
     ): WebhookApplyOutcome
+
+    /** Inspect a previously recorded `(provider, eventId)` delivery, if present. */
+    suspend fun webhookEvent(provider: String, eventId: String): StoredWebhookEvent? = null
 
     /** Every subscription row for [ownerId] that grants access at [now]. */
     suspend fun activeForOwner(ownerId: String, now: Long = System.currentTimeMillis()): List<EntitlementRow>
@@ -127,7 +154,7 @@ class MemoryEntitlementStore(
     private data class SubKey(val provider: String, val externalSubId: String)
 
     private val lock = Any()
-    private val seenEvents = HashSet<EventKey>()
+    private val events = LinkedHashMap<EventKey, StoredWebhookEvent>()
     private val rows = LinkedHashMap<SubKey, EntitlementRow>()
 
     override suspend fun applyWebhookEvent(
@@ -135,31 +162,54 @@ class MemoryEntitlementStore(
         eventId: String,
         now: Long,
         upsert: EntitlementUpsert?,
+        rawPayload: String?,
     ): WebhookApplyOutcome {
         val cleanProvider = provider.trim().also { require(it.isNotEmpty()) { "provider must not be blank" } }
         val cleanEventId = eventId.trim().also { require(it.isNotEmpty()) { "eventId must not be blank" } }
         val resolvedOwner = upsert?.let { canonicalOwner(it.ownerId) }
         synchronized(lock) {
-            if (!seenEvents.add(EventKey(cleanProvider, cleanEventId))) {
+            val eventKey = EventKey(cleanProvider, cleanEventId)
+            if (eventKey in events) {
                 return WebhookApplyOutcome.DUPLICATE
             }
+            var outcome = WebhookApplyOutcome.APPLIED
             if (upsert != null && resolvedOwner != null) {
-                rows[SubKey(cleanProvider, upsert.externalSubId)] = EntitlementRow(
-                    provider = cleanProvider,
-                    externalSubId = upsert.externalSubId,
-                    ownerId = resolvedOwner,
-                    planCode = upsert.planCode,
-                    status = upsert.status,
-                    quantity = upsert.quantity,
-                    currentPeriodEnd = upsert.currentPeriodEnd,
-                    graceUntil = upsert.graceUntil,
-                    lastEventId = cleanEventId,
-                    updatedAt = now,
-                )
+                val subKey = SubKey(cleanProvider, upsert.externalSubId)
+                val existing = rows[subKey]
+                val existingTs = existing?.sourceTimestamp
+                val incomingTs = upsert.sourceTimestamp
+                if (existingTs != null && incomingTs != null && incomingTs < existingTs) {
+                    outcome = WebhookApplyOutcome.STALE_IGNORED
+                } else {
+                    rows[subKey] = EntitlementRow(
+                        provider = cleanProvider,
+                        externalSubId = upsert.externalSubId,
+                        ownerId = resolvedOwner,
+                        planCode = upsert.planCode,
+                        status = upsert.status,
+                        quantity = upsert.quantity,
+                        currentPeriodEnd = upsert.currentPeriodEnd,
+                        graceUntil = upsert.graceUntil,
+                        lastEventId = cleanEventId,
+                        updatedAt = now,
+                        cancelAtPeriodEnd = upsert.cancelAtPeriodEnd,
+                        sourceTimestamp = incomingTs ?: existingTs,
+                    )
+                }
             }
-            return WebhookApplyOutcome.APPLIED
+            events[eventKey] = StoredWebhookEvent(
+                provider = cleanProvider,
+                eventId = cleanEventId,
+                receivedAt = now,
+                rawPayload = rawPayload,
+                outcome = outcome,
+            )
+            return outcome
         }
     }
+
+    override suspend fun webhookEvent(provider: String, eventId: String): StoredWebhookEvent? =
+        synchronized(lock) { events[EventKey(provider.trim(), eventId.trim())] }
 
     override suspend fun activeForOwner(ownerId: String, now: Long): List<EntitlementRow> {
         val resolved = canonicalOwner(ownerId)
@@ -200,13 +250,66 @@ enum class CreditGrantOutcome {
     DUPLICATE,
 }
 
+/** Lifecycle status of a two-phase AI credit reservation (`V9__production_saas_hardening.sql`). */
+enum class CreditReservationStatus {
+    RESERVED,
+    COMMITTED,
+    RELEASED,
+    EXPIRED,
+}
+
+/** One in-flight or settled two-phase credit reservation. */
+data class CreditReservationRow(
+    val id: String,
+    val ownerId: String,
+    val reservedUnits: Long,
+    val actualUnits: Long? = null,
+    val status: CreditReservationStatus,
+    val expiresAt: Long,
+    val createdAt: Long,
+    val settledAt: Long? = null,
+) {
+    fun isActiveHoldAt(now: Long): Boolean =
+        status == CreditReservationStatus.RESERVED && expiresAt > now
+}
+
+/** Outcome of settling a reservation via [CreditBalanceStore.commitReservation]. */
+enum class CreditCommitOutcome {
+    COMMITTED,
+    ALREADY_COMMITTED,
+    ALREADY_RELEASED,
+    EXPIRED_INSUFFICIENT,
+    NOT_FOUND,
+}
+
+/** Classification of an immutable entry in `credit_ledger`. */
+enum class CreditLedgerEntryType {
+    GRANT,
+    SPEND,
+    COMMIT,
+}
+
+/** Append-only journal entry recording every settled credit delta (`V9__production_saas_hardening.sql`). */
+data class CreditLedgerEntry(
+    val id: String,
+    val ownerId: String,
+    val entryType: CreditLedgerEntryType,
+    val deltaUnits: Long,
+    val referenceId: String,
+    val createdAt: Long,
+)
+
 /**
  * First-party credit balance ledger for hybrid subscription + top-up AI products.
  *
+ * All balances and deductions are stored in integer minor/micro-units (never floats).
  * Purchased top-up packs can carry a 180-day `expiresAt` ceiling so Japanese sales
- * stay outside prepaid-instrument registration (`資金決済法`). [trySpend] drains
- * earliest-expiring live lots first before touching non-expiring promotional grants,
- * and never partially deducts when total live balance falls short.
+ * stay outside prepaid-instrument registration (`資金決済法`).
+ *
+ * Supports both immediate [trySpend] and two-phase holds ([reserve] ->
+ * [commitReservation] / [releaseReservation]) so streaming or long-running AI calls
+ * lock maximum budget up front, settle actual usage on completion, and never burn
+ * customer credits when an upstream provider fails or times out.
  */
 interface CreditBalanceStore {
     suspend fun grant(
@@ -217,6 +320,7 @@ interface CreditBalanceStore {
         now: Long = System.currentTimeMillis(),
     ): CreditGrantOutcome
 
+    /** Live unreserved units available to spend or reserve at [now]. */
     suspend fun available(ownerId: String, now: Long = System.currentTimeMillis()): Long
 
     suspend fun trySpend(
@@ -225,7 +329,42 @@ interface CreditBalanceStore {
         now: Long = System.currentTimeMillis(),
     ): Boolean
 
+    /**
+     * Place a temporary hold for [units] until `now + ttlMs`. Returns `null` when
+     * live unreserved balance is below [units]. If the caller crashes without
+     * settling, the hold automatically stops blocking [available] once `now >= expiresAt`.
+     */
+    suspend fun reserve(
+        ownerId: String,
+        units: Long,
+        ttlMs: Long = DEFAULT_RESERVATION_TTL_MS,
+        now: Long = System.currentTimeMillis(),
+    ): CreditReservationRow?
+
+    /**
+     * Settle [reservationId] for [actualUnits] (`0..reservedUnits`), draining
+     * earliest-expiring live lots first and automatically releasing any unused hold.
+     */
+    suspend fun commitReservation(
+        reservationId: String,
+        actualUnits: Long,
+        now: Long = System.currentTimeMillis(),
+    ): CreditCommitOutcome
+
+    /** Release an uncommitted hold so zero credits are deducted after an upstream failure. */
+    suspend fun releaseReservation(
+        reservationId: String,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean
+
+    /** Chronological append-only audit journal of grants and settled spends for [ownerId]. */
+    suspend fun ledgerForOwner(ownerId: String): List<CreditLedgerEntry>
+
     suspend fun deleteAllForOwner(ownerId: String)
+
+    companion object {
+        const val DEFAULT_RESERVATION_TTL_MS: Long = 5 * 60_000L
+    }
 }
 
 /** In-memory [CreditBalanceStore] for local-only mode and fast unit tests. */
@@ -233,6 +372,8 @@ class MemoryCreditBalanceStore : CreditBalanceStore {
 
     private val lock = Any()
     private val grantsByRef = LinkedHashMap<String, CreditGrantRow>()
+    private val reservations = LinkedHashMap<String, CreditReservationRow>()
+    private val ledger = ArrayList<CreditLedgerEntry>()
 
     override suspend fun grant(
         ownerId: String,
@@ -255,38 +396,161 @@ class MemoryCreditBalanceStore : CreditBalanceStore {
                 expiresAt = expiresAt,
                 createdAt = now,
             )
+            ledger += CreditLedgerEntry(
+                id = UUID.randomUUID().toString(),
+                ownerId = ownerId,
+                entryType = CreditLedgerEntryType.GRANT,
+                deltaUnits = units,
+                referenceId = sourceRef,
+                createdAt = now,
+            )
             return CreditGrantOutcome.GRANTED
         }
     }
 
     override suspend fun available(ownerId: String, now: Long): Long = synchronized(lock) {
-        grantsByRef.values
-            .filter { it.ownerId == ownerId && it.isLiveAt(now) }
-            .sumOf { it.remainingUnits }
+        val gross = liveGrantsFor(ownerId, now).sumOf { it.remainingUnits }
+        val held = activeHeldUnitsFor(ownerId, now)
+        (gross - held).coerceAtLeast(0L)
     }
 
     override suspend fun trySpend(ownerId: String, units: Long, now: Long): Boolean {
         require(units > 0L) { "units must be positive" }
         synchronized(lock) {
-            val live = grantsByRef.values
-                .filter { it.ownerId == ownerId && it.isLiveAt(now) }
-                .sortedWith(creditDrainOrder)
-            if (live.sumOf { it.remainingUnits } < units) return false
-
-            var remainingToSpend = units
-            for (lot in live) {
-                if (remainingToSpend == 0L) break
-                val deduct = minOf(remainingToSpend, lot.remainingUnits)
-                grantsByRef[lot.sourceRef] = lot.copy(remainingUnits = lot.remainingUnits - deduct)
-                remainingToSpend -= deduct
-            }
+            val live = liveGrantsFor(ownerId, now)
+            val held = activeHeldUnitsFor(ownerId, now)
+            if (live.sumOf { it.remainingUnits } - held < units) return false
+            drainLots(live, units)
+            ledger += CreditLedgerEntry(
+                id = UUID.randomUUID().toString(),
+                ownerId = ownerId,
+                entryType = CreditLedgerEntryType.SPEND,
+                deltaUnits = -units,
+                referenceId = "spend:${UUID.randomUUID()}",
+                createdAt = now,
+            )
             return true
         }
     }
 
+    override suspend fun reserve(
+        ownerId: String,
+        units: Long,
+        ttlMs: Long,
+        now: Long,
+    ): CreditReservationRow? {
+        require(ownerId.isNotBlank()) { "ownerId must not be blank" }
+        require(units > 0L) { "units must be positive" }
+        require(ttlMs > 0L) { "ttlMs must be positive" }
+        synchronized(lock) {
+            val gross = liveGrantsFor(ownerId, now).sumOf { it.remainingUnits }
+            val held = activeHeldUnitsFor(ownerId, now)
+            if (gross - held < units) return null
+            val row = CreditReservationRow(
+                id = UUID.randomUUID().toString(),
+                ownerId = ownerId,
+                reservedUnits = units,
+                status = CreditReservationStatus.RESERVED,
+                expiresAt = now + ttlMs,
+                createdAt = now,
+            )
+            reservations[row.id] = row
+            return row
+        }
+    }
+
+    override suspend fun commitReservation(
+        reservationId: String,
+        actualUnits: Long,
+        now: Long,
+    ): CreditCommitOutcome {
+        require(reservationId.isNotBlank()) { "reservationId must not be blank" }
+        require(actualUnits >= 0L) { "actualUnits must be >= 0" }
+        synchronized(lock) {
+            val current = reservations[reservationId] ?: return CreditCommitOutcome.NOT_FOUND
+            when (current.status) {
+                CreditReservationStatus.COMMITTED -> return CreditCommitOutcome.ALREADY_COMMITTED
+                CreditReservationStatus.RELEASED -> return CreditCommitOutcome.ALREADY_RELEASED
+                CreditReservationStatus.EXPIRED -> return CreditCommitOutcome.EXPIRED_INSUFFICIENT
+                CreditReservationStatus.RESERVED -> Unit
+            }
+            require(actualUnits <= current.reservedUnits) {
+                "actualUnits ($actualUnits) cannot exceed reservedUnits (${current.reservedUnits})"
+            }
+            if (actualUnits > 0L) {
+                val live = liveGrantsFor(current.ownerId, now)
+                val otherHeld = activeHeldUnitsFor(current.ownerId, now, excludeReservationId = reservationId)
+                if (live.sumOf { it.remainingUnits } - otherHeld < actualUnits) {
+                    reservations[reservationId] = current.copy(
+                        status = CreditReservationStatus.EXPIRED,
+                        settledAt = now,
+                    )
+                    return CreditCommitOutcome.EXPIRED_INSUFFICIENT
+                }
+                drainLots(live, actualUnits)
+                ledger += CreditLedgerEntry(
+                    id = UUID.randomUUID().toString(),
+                    ownerId = current.ownerId,
+                    entryType = CreditLedgerEntryType.COMMIT,
+                    deltaUnits = -actualUnits,
+                    referenceId = reservationId,
+                    createdAt = now,
+                )
+            }
+            reservations[reservationId] = current.copy(
+                actualUnits = actualUnits,
+                status = CreditReservationStatus.COMMITTED,
+                settledAt = now,
+            )
+            return CreditCommitOutcome.COMMITTED
+        }
+    }
+
+    override suspend fun releaseReservation(reservationId: String, now: Long): Boolean =
+        synchronized(lock) {
+            val current = reservations[reservationId] ?: return@synchronized false
+            if (current.status != CreditReservationStatus.RESERVED) return@synchronized false
+            reservations[reservationId] = current.copy(
+                actualUnits = 0L,
+                status = CreditReservationStatus.RELEASED,
+                settledAt = now,
+            )
+            true
+        }
+
+    override suspend fun ledgerForOwner(ownerId: String): List<CreditLedgerEntry> =
+        synchronized(lock) {
+            ledger.filter { it.ownerId == ownerId }.sortedWith(compareBy({ it.createdAt }, { it.id }))
+        }
+
     override suspend fun deleteAllForOwner(ownerId: String) {
         synchronized(lock) {
             grantsByRef.entries.removeIf { it.value.ownerId == ownerId }
+            reservations.entries.removeIf { it.value.ownerId == ownerId }
+            ledger.removeIf { it.ownerId == ownerId }
+        }
+    }
+
+    private fun liveGrantsFor(ownerId: String, now: Long): List<CreditGrantRow> =
+        grantsByRef.values
+            .filter { it.ownerId == ownerId && it.isLiveAt(now) }
+            .sortedWith(creditDrainOrder)
+
+    private fun activeHeldUnitsFor(
+        ownerId: String,
+        now: Long,
+        excludeReservationId: String? = null,
+    ): Long = reservations.values
+        .filter { it.ownerId == ownerId && it.id != excludeReservationId && it.isActiveHoldAt(now) }
+        .sumOf { it.reservedUnits }
+
+    private fun drainLots(live: List<CreditGrantRow>, units: Long) {
+        var remainingToSpend = units
+        for (lot in live) {
+            if (remainingToSpend == 0L) break
+            val deduct = minOf(remainingToSpend, lot.remainingUnits)
+            grantsByRef[lot.sourceRef] = lot.copy(remainingUnits = lot.remainingUnits - deduct)
+            remainingToSpend -= deduct
         }
     }
 }

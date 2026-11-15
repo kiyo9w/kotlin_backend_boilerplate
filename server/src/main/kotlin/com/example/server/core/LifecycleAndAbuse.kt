@@ -132,15 +132,20 @@ data class AccountDeletionReport(
 
 /**
  * Coordinates complete first-party account deletion (App Store Review Guideline
- * `5.1.1(v)` and Google Play User Data deletion policy).
+ * `5.1.1(v)`, Google Play User Data deletion policy, GDPR Art. 17, and Vietnam PDPL).
  *
  * Execution order is intentionally retry-safe:
- * 1. Revoke external Sign in with Apple credentials first (failing fast before
- *    local identity links disappear if Apple's revocation endpoint is unreachable).
- * 2. Revoke every active session token for both the presented and canonical owner.
- * 3. Purge first-party documents, credits, entitlements, AI usage logs, and any
- *    product-domain tables via `deleteProductData`.
- * 4. Unlink `(issuer, subject)` OIDC bindings last so a retried deletion after a
+ * 1. Verify workspace ownership invariants (`assertDeletableForOwner`) first so a
+ *    sole owner of a shared multi-member workspace receives [LastWorkspaceOwnerException]
+ *    before any external credential revocation or local mutation runs.
+ * 2. Revoke external Sign in with Apple credentials (failing fast before local
+ *    identity links disappear if Apple's revocation endpoint is unreachable).
+ * 3. Revoke every active session token and workspace API key for both the presented
+ *    and canonical owner, delete solo/personal workspaces, and leave shared workspaces.
+ * 4. Purge first-party documents, credits, entitlements, AI usage logs, and any
+ *    product-domain tables via `deleteProductData`, while pseudonymizing immutable
+ *    security/billing audit records.
+ * 5. Unlink `(issuer, subject)` OIDC bindings last so a retried deletion after a
  *    transient failure still resolves the canonical owner.
  */
 class AccountDeletionService(
@@ -150,6 +155,9 @@ class AccountDeletionService(
     private val entitlements: EntitlementStore? = null,
     private val credits: CreditBalanceStore? = null,
     private val aiUsage: AiUsageStore? = null,
+    private val workspaces: WorkspaceStore? = null,
+    private val apiKeys: ApiKeyStore? = null,
+    private val auditLogs: AuditLogStore? = null,
     private val appleRevoker: AppleTokenRevoker = NoOpAppleTokenRevoker,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -162,6 +170,12 @@ class AccountDeletionService(
     ): AccountDeletionReport {
         require(ownerId.isNotBlank()) { "ownerId must not be blank" }
         val canonical = identities.canonicalOwner(ownerId)
+
+        workspaces?.assertDeletableForOwner(canonical)
+        if (ownerId != canonical) {
+            workspaces?.assertDeletableForOwner(ownerId)
+        }
+
         val trimmedApple = appleToken?.trim()?.takeIf { it.isNotEmpty() }
         val appleRevoked = if (trimmedApple != null) {
             val ok = appleRevoker.revoke(trimmedApple, appleTokenHint)
@@ -177,6 +191,21 @@ class AccountDeletionService(
             sessions.revokeAll(ownerId, now)
         }
 
+        apiKeys?.revokeAllForCreator(canonical, now)
+        if (ownerId != canonical) {
+            apiKeys?.revokeAllForCreator(ownerId, now)
+        }
+
+        val deletedWorkspaces = buildSet {
+            workspaces?.deleteOrLeaveForOwner(canonical)?.let(::addAll)
+            if (ownerId != canonical) {
+                workspaces?.deleteOrLeaveForOwner(ownerId)?.let(::addAll)
+            }
+        }
+        for (wsId in deletedWorkspaces) {
+            apiKeys?.deleteAllForWorkspace(wsId)
+        }
+
         documents?.deleteAllForOwner(canonical)
         if (ownerId != canonical) documents?.deleteAllForOwner(ownerId)
 
@@ -190,6 +219,10 @@ class AccountDeletionService(
         if (ownerId != canonical) aiUsage?.deleteAllForOwner(ownerId)
 
         deleteProductData(canonical)
+
+        auditLogs?.pseudonymizeForOwner(canonical)
+        if (ownerId != canonical) auditLogs?.pseudonymizeForOwner(ownerId)
+
         identities.unlinkAll(canonical)
 
         return AccountDeletionReport(

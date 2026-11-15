@@ -4,18 +4,17 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.greater
 import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.update
 
 /**
- * Session rows. One row is one issued pair: the hashes are what lookups run
- * against, and `revoked_at` is the liveness flag that both rotation and
- * revocation set. Raw tokens never reach the table.
+ * Session rows (`V3__sessions.sql` + `V9__production_saas_hardening.sql`).
  *
- * Indexes live in the migration (owner revoke-all, revocation sweeps), which
- * [SqlSessionStore] mirrors but does not create — Flyway owns the schema.
+ * Raw tokens never reach the table; lookups run against SHA-256 hashes, while
+ * `family_id` and `rotated_at` enforce `RFC 9700` refresh-token reuse detection.
  */
 private object Sessions : Table("sessions") {
     val id = text("id")
@@ -29,22 +28,19 @@ private object Sessions : Table("sessions") {
     val revokedAt = long("revoked_at").nullable()
     val createdAt = long("created_at")
     val lastUsedAt = long("last_used_at").nullable()
+    val familyId = text("family_id")
+    val rotatedAt = long("rotated_at").nullable()
+    val sudoUntil = long("sudo_until").nullable()
+    val ipAddress = text("ip_address").nullable()
+    val userAgent = text("user_agent").nullable()
     override val primaryKey = PrimaryKey(id)
 }
 
 /**
- * SQL-backed [SessionStore] over the `sessions` table (V3__sessions.sql).
+ * SQL-backed [SessionStore] over the `sessions` table.
  *
- * The rotation guarantee is a compare-and-set: the presented row is revoked
- * with `UPDATE ... WHERE id = ? AND revoked_at IS NULL` and the successor is
- * inserted in the same transaction. Two refreshes replaying one token read the
- * same live row; exactly one update reports a changed row and only that caller
- * inserts a successor. The loser throws [StaleClaimException], so a replayed
- * refresh token can never mint a second pair.
- *
- * A database advisory lock is deliberately not used: the compare-and-set is
- * portable across H2 (tests) and Postgres and needs no session affinity, the
- * same reasoning as [SqlScheduleStore.advance].
+ * Rotation is an atomic compare-and-set (`WHERE id = ? AND revoked_at IS NULL`)
+ * paired with inserting the successor in the same transaction.
  */
 class SqlSessionStore : SessionStore {
 
@@ -60,12 +56,17 @@ class SqlSessionStore : SessionStore {
         Sessions.selectAll().where { Sessions.refreshHash eq hash }.firstOrNull()?.toRow()
     }
 
+    override suspend fun childrenOf(parentId: String): List<SessionRow> = coreDbQuery {
+        Sessions.selectAll().where { Sessions.rotatedFrom eq parentId }.map { it.toRow() }
+    }
+
     override suspend fun rotate(oldId: String, next: SessionRow, now: Long) {
         coreDbQuery {
             val retired = Sessions.update({
                 (Sessions.id eq oldId) and Sessions.revokedAt.isNull()
             }) {
                 it[revokedAt] = now
+                it[rotatedAt] = now
             }
             if (retired != 1) {
                 throw StaleClaimException("session $oldId is already rotated or revoked")
@@ -82,6 +83,24 @@ class SqlSessionStore : SessionStore {
         }
     }
 
+    override suspend fun revokeFamily(familyId: String, now: Long) {
+        coreDbQuery {
+            Sessions.update({ (Sessions.familyId eq familyId) and Sessions.revokedAt.isNull() }) {
+                it[revokedAt] = now
+            }
+        }
+    }
+
+    override suspend fun revokeForOwner(ownerId: String, sessionId: String, now: Long): Boolean = coreDbQuery {
+        Sessions.update({
+            (Sessions.id eq sessionId) and
+                (Sessions.ownerId eq ownerId) and
+                Sessions.revokedAt.isNull()
+        }) {
+            it[revokedAt] = now
+        } == 1
+    }
+
     override suspend fun revokeAll(ownerId: String, now: Long) {
         coreDbQuery {
             Sessions.update({ (Sessions.ownerId eq ownerId) and Sessions.revokedAt.isNull() }) {
@@ -89,6 +108,29 @@ class SqlSessionStore : SessionStore {
             }
         }
     }
+
+    override suspend fun activeForOwner(ownerId: String, now: Long): List<SessionRow> = coreDbQuery {
+        Sessions.selectAll()
+            .where {
+                (Sessions.ownerId eq ownerId) and
+                    Sessions.revokedAt.isNull() and
+                    (Sessions.refreshExpiresAt greater now)
+            }
+            .map { it.toRow() }
+            .sortedByDescending { it.lastUsedAt ?: it.createdAt }
+    }
+
+    override suspend fun elevateSudo(ownerId: String, sessionId: String, sudoUntil: Long, now: Long): Boolean =
+        coreDbQuery {
+            Sessions.update({
+                (Sessions.id eq sessionId) and
+                    (Sessions.ownerId eq ownerId) and
+                    Sessions.revokedAt.isNull() and
+                    (Sessions.refreshExpiresAt greater now)
+            }) {
+                it[Sessions.sudoUntil] = sudoUntil
+            } == 1
+        }
 
     override suspend fun touch(id: String, now: Long) {
         coreDbQuery {
@@ -111,6 +153,11 @@ class SqlSessionStore : SessionStore {
             it[revokedAt] = row.revokedAt
             it[createdAt] = row.createdAt
             it[lastUsedAt] = row.lastUsedAt
+            it[familyId] = row.familyId
+            it[rotatedAt] = row.rotatedAt
+            it[sudoUntil] = row.sudoUntil
+            it[ipAddress] = row.ipAddress
+            it[userAgent] = row.userAgent
         }
     }
 
@@ -126,5 +173,10 @@ class SqlSessionStore : SessionStore {
         revokedAt = this[Sessions.revokedAt],
         createdAt = this[Sessions.createdAt],
         lastUsedAt = this[Sessions.lastUsedAt],
+        familyId = this[Sessions.familyId],
+        rotatedAt = this[Sessions.rotatedAt],
+        sudoUntil = this[Sessions.sudoUntil],
+        ipAddress = this[Sessions.ipAddress],
+        userAgent = this[Sessions.userAgent],
     )
 }

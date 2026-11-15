@@ -12,7 +12,16 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** What a resolved session identifies. */
-data class AuthSubject(val ownerId: String, val deviceId: String? = null, val roles: Set<String> = emptySet())
+data class AuthSubject(
+    val ownerId: String,
+    val deviceId: String? = null,
+    val roles: Set<String> = emptySet(),
+    val sessionId: String? = null,
+    val sudoUntil: Long? = null,
+    val impersonatorId: String? = null,
+) {
+    fun hasSudoAt(now: Long): Boolean = sudoUntil != null && sudoUntil > now
+}
 
 /** One issued pair. Raw values are returned once; only hashes persist. */
 data class SessionTokens(
@@ -22,8 +31,21 @@ data class SessionTokens(
     val refreshExpiresAt: Long,
 )
 
-/** Token lifetimes. Defaults: access 15 minutes, refresh 30 days. */
-data class TokenTtl(val accessMs: Long = 15 * 60_000L, val refreshMs: Long = 30L * 24 * 3600_000L)
+/**
+ * Token lifetimes and security windows.
+ *
+ * - [accessMs]: 15 minutes
+ * - [refreshMs]: 30 days
+ * - [reuseGraceMs]: 10 seconds for benign multi-tab or flaky-network retries before
+ *   replaying a rotated refresh token revokes the entire token family (`RFC 9700` §4.14.2)
+ * - [sudoMs]: 15 minutes for step-up re-authentication on sensitive mutations
+ */
+data class TokenTtl(
+    val accessMs: Long = 15 * 60_000L,
+    val refreshMs: Long = 30L * 24 * 3600_000L,
+    val reuseGraceMs: Long = 10_000L,
+    val sudoMs: Long = 15 * 60_000L,
+)
 
 /** One persisted session row. accessHash/refreshHash are SHA-256 hex of the raw tokens. */
 data class SessionRow(
@@ -38,6 +60,11 @@ data class SessionRow(
     val revokedAt: Long? = null,
     val createdAt: Long,
     val lastUsedAt: Long? = null,
+    val familyId: String = id,
+    val rotatedAt: Long? = null,
+    val sudoUntil: Long? = null,
+    val ipAddress: String? = null,
+    val userAgent: String? = null,
 )
 
 /**
@@ -56,18 +83,32 @@ interface SessionStore {
     /** The row whose refresh token hashes to [hash], live or revoked; null when none. */
     suspend fun byRefreshHash(hash: String): SessionRow?
 
+    /** Every row whose `rotatedFrom` points to [parentId]. */
+    suspend fun childrenOf(parentId: String): List<SessionRow>
+
     /**
      * Atomically mark [oldId] rotated and insert [next]; a stale rotation is
-     * refused. The refusal is [StaleClaimException]: the compare-and-set found
-     * the row already revoked, so the caller must not hand out [next].
+     * refused with [StaleClaimException].
      */
     suspend fun rotate(oldId: String, next: SessionRow, now: Long)
 
     /** Mark one row revoked. Idempotent; a missing or already-revoked row is a no-op. */
     suspend fun revoke(id: String, now: Long)
 
+    /** Mark every live row in [familyId] revoked (`RFC 9700` refresh-token reuse defense). */
+    suspend fun revokeFamily(familyId: String, now: Long)
+
+    /** Mark one specific session belonging to [ownerId] revoked; false when missing, foreign, or already revoked. */
+    suspend fun revokeForOwner(ownerId: String, sessionId: String, now: Long): Boolean
+
     /** Mark every live row for [ownerId] revoked, leaving other owners untouched. */
     suspend fun revokeAll(ownerId: String, now: Long)
+
+    /** Every unrevoked, non-refresh-expired session row for [ownerId]. */
+    suspend fun activeForOwner(ownerId: String, now: Long): List<SessionRow>
+
+    /** Record step-up `sudo` verification until [sudoUntil] on [sessionId] owned by [ownerId]. */
+    suspend fun elevateSudo(ownerId: String, sessionId: String, sudoUntil: Long, now: Long): Boolean
 
     /** Record that the row [id] was used at [now]. */
     suspend fun touch(id: String, now: Long)
@@ -87,12 +128,15 @@ class MemorySessionStore : SessionStore {
         synchronized(lock) { rows[row.id] = row }
     }
 
-    // Lookups scan; memory mode is one process and holds one process's sessions.
     override suspend fun byAccessHash(hash: String): SessionRow? =
         rows.values.firstOrNull { it.accessHash == hash }
 
     override suspend fun byRefreshHash(hash: String): SessionRow? =
         rows.values.firstOrNull { it.refreshHash == hash }
+
+    override suspend fun childrenOf(parentId: String): List<SessionRow> = synchronized(lock) {
+        rows.values.filter { it.rotatedFrom == parentId }
+    }
 
     override suspend fun rotate(oldId: String, next: SessionRow, now: Long) {
         synchronized(lock) {
@@ -100,7 +144,7 @@ class MemorySessionStore : SessionStore {
             if (current.revokedAt != null) {
                 throw StaleClaimException("session $oldId is already rotated or revoked")
             }
-            rows[oldId] = current.copy(revokedAt = now)
+            rows[oldId] = current.copy(revokedAt = now, rotatedAt = now)
             rows[next.id] = next
         }
     }
@@ -113,6 +157,24 @@ class MemorySessionStore : SessionStore {
         }
     }
 
+    override suspend fun revokeFamily(familyId: String, now: Long) {
+        synchronized(lock) {
+            rows.forEach { (id, row) ->
+                if (row.familyId == familyId && row.revokedAt == null) {
+                    rows[id] = row.copy(revokedAt = now)
+                }
+            }
+        }
+    }
+
+    override suspend fun revokeForOwner(ownerId: String, sessionId: String, now: Long): Boolean =
+        synchronized(lock) {
+            val current = rows[sessionId] ?: return@synchronized false
+            if (current.ownerId != ownerId || current.revokedAt != null) return@synchronized false
+            rows[sessionId] = current.copy(revokedAt = now)
+            true
+        }
+
     override suspend fun revokeAll(ownerId: String, now: Long) {
         synchronized(lock) {
             rows.forEach { (id, row) ->
@@ -122,6 +184,23 @@ class MemorySessionStore : SessionStore {
             }
         }
     }
+
+    override suspend fun activeForOwner(ownerId: String, now: Long): List<SessionRow> =
+        synchronized(lock) {
+            rows.values
+                .filter { it.ownerId == ownerId && it.revokedAt == null && it.refreshExpiresAt > now }
+                .sortedByDescending { it.lastUsedAt ?: it.createdAt }
+        }
+
+    override suspend fun elevateSudo(ownerId: String, sessionId: String, sudoUntil: Long, now: Long): Boolean =
+        synchronized(lock) {
+            val current = rows[sessionId] ?: return@synchronized false
+            if (current.ownerId != ownerId || current.revokedAt != null || current.refreshExpiresAt <= now) {
+                return@synchronized false
+            }
+            rows[sessionId] = current.copy(sudoUntil = sudoUntil)
+            true
+        }
 
     override suspend fun touch(id: String, now: Long) {
         synchronized(lock) {
@@ -135,11 +214,10 @@ class MemorySessionStore : SessionStore {
  * tokens: they are minted here, returned once, and persisted only as SHA-256
  * hashes.
  *
- * Lookup is by hash, so a plain equality comparison is enough. The stored value
- * is the digest of a 256-bit random token; guessing a preimage is the attack,
- * and a timing side channel on the comparison does not help with that, so no
- * constant-time compare is needed (unlike the shared secret in
- * [HmacWebhookVerifier]).
+ * Implements `RFC 9700` §4.14.2 refresh-token rotation with token-family reuse
+ * revocation: replaying an already-rotated refresh token outside [TokenTtl.reuseGraceMs]
+ * (or after its successor has already rotated) revokes every live token in that
+ * `familyId` while leaving the owner's other device families untouched.
  */
 class SessionService(
     private val store: SessionStore,
@@ -150,13 +228,20 @@ class SessionService(
     private val random = SecureRandom()
 
     /** Mint and persist a pair. The raw tokens leave here exactly once. */
-    suspend fun issue(ownerId: String, deviceId: String? = null): SessionTokens {
+    suspend fun issue(
+        ownerId: String,
+        deviceId: String? = null,
+        ipAddress: String? = null,
+        userAgent: String? = null,
+        sudoOnIssue: Boolean = false,
+    ): SessionTokens {
         val now = clock()
         val access = newToken()
         val refresh = newToken()
+        val rowId = UUID.randomUUID().toString()
         store.insert(
             SessionRow(
-                id = UUID.randomUUID().toString(),
+                id = rowId,
                 ownerId = ownerId,
                 deviceId = deviceId,
                 accessHash = hash(access),
@@ -164,6 +249,10 @@ class SessionService(
                 accessExpiresAt = now + ttl.accessMs,
                 refreshExpiresAt = now + ttl.refreshMs,
                 createdAt = now,
+                familyId = rowId,
+                sudoUntil = if (sudoOnIssue) now + ttl.sudoMs else null,
+                ipAddress = ipAddress,
+                userAgent = userAgent,
             ),
         )
         return SessionTokens(access, refresh, now + ttl.accessMs, now + ttl.refreshMs)
@@ -175,20 +264,37 @@ class SessionService(
         val row = store.byAccessHash(hash(accessToken)) ?: return null
         if (row.revokedAt != null || row.accessExpiresAt <= now) return null
         store.touch(row.id, now)
-        return AuthSubject(ownerId = row.ownerId, deviceId = row.deviceId)
+        return AuthSubject(
+            ownerId = row.ownerId,
+            deviceId = row.deviceId,
+            sessionId = row.id,
+            sudoUntil = row.sudoUntil,
+        )
     }
 
     /**
-     * Rotates: the presented refresh token is invalid immediately; returns null
-     * when it is not live. The revocation of the presented row and the insert of
-     * the successor are one atomic step, so a replayed token — or a race between
-     * two refreshes — finds the row revoked and is refused. The presented token
-     * dies even if the returned pair is never used.
+     * Rotates a live refresh token and enforces `RFC 9700` reuse detection on
+     * already-rotated tokens.
      */
-    suspend fun refresh(refreshToken: String): SessionTokens? {
+    suspend fun refresh(
+        refreshToken: String,
+        ipAddress: String? = null,
+        userAgent: String? = null,
+    ): SessionTokens? {
         val now = clock()
         val current = store.byRefreshHash(hash(refreshToken)) ?: return null
-        if (current.revokedAt != null || current.refreshExpiresAt <= now) return null
+        if (current.refreshExpiresAt <= now) return null
+        if (current.revokedAt != null) {
+            val rotatedAt = current.rotatedAt
+            if (rotatedAt != null) {
+                val graceExpired = (now - rotatedAt) > ttl.reuseGraceMs
+                val successorAlreadyAdvanced = store.childrenOf(current.id).any { it.rotatedAt != null }
+                if (graceExpired || successorAlreadyAdvanced) {
+                    store.revokeFamily(current.familyId, now)
+                }
+            }
+            return null
+        }
         val access = newToken()
         val refresh = newToken()
         val next = SessionRow(
@@ -202,13 +308,15 @@ class SessionService(
             rotatedFrom = current.id,
             createdAt = now,
             lastUsedAt = now,
+            familyId = current.familyId,
+            sudoUntil = current.sudoUntil,
+            ipAddress = ipAddress ?: current.ipAddress,
+            userAgent = userAgent ?: current.userAgent,
         )
         return try {
             store.rotate(current.id, next, now)
             SessionTokens(access, refresh, next.accessExpiresAt, next.refreshExpiresAt)
         } catch (refused: StaleClaimException) {
-            // Another refresh rotated the presented token first, so this
-            // successor was never persisted and there is nothing to return.
             null
         }
     }
@@ -222,6 +330,21 @@ class SessionService(
         if (row.revokedAt != null) return false
         store.revoke(row.id, clock())
         return true
+    }
+
+    /** Revoke one specific session owned by [ownerId] (device management screen). */
+    suspend fun revokeSession(ownerId: String, sessionId: String): Boolean =
+        store.revokeForOwner(ownerId, sessionId, clock())
+
+    /** List active device sessions for [ownerId]. */
+    suspend fun activeSessions(ownerId: String): List<SessionRow> =
+        store.activeForOwner(ownerId, clock())
+
+    /** Mark [sessionId] owned by [ownerId] as `sudo`-verified for [sudoTtlMs]. */
+    suspend fun elevateSudo(ownerId: String, sessionId: String, sudoTtlMs: Long = ttl.sudoMs): Boolean {
+        require(sudoTtlMs > 0L) { "sudoTtlMs must be positive" }
+        val now = clock()
+        return store.elevateSudo(ownerId, sessionId, sudoUntil = now + sudoTtlMs, now = now)
     }
 
     /** Revoke every live session for [ownerId], on every device. */
@@ -249,6 +372,23 @@ class SessionService(
  * ```
  */
 val AuthSubjectKey = AttributeKey<AuthSubject>("AuthSubject")
+
+/**
+ * Require that the authenticated caller holds an unexpired step-up `sudo`
+ * proof on the current session (`403 SUDO_REQUIRED` otherwise).
+ */
+fun ApplicationCall.requireSudo(now: Long = System.currentTimeMillis()): AuthSubject {
+    val subject = attributes.getOrNull(AuthSubjectKey)
+        ?: throw ApiException(HttpStatusCode.Unauthorized, "UNAUTHORIZED", "authentication required")
+    if (!subject.hasSudoAt(now)) {
+        throw ApiException(
+            HttpStatusCode.Forbidden,
+            "SUDO_REQUIRED",
+            "recent re-authentication required for this action",
+        )
+    }
+    return subject
+}
 
 /**
  * Bearer-token [RouteGuard]. Resolves `Authorization: Bearer <token>` through
