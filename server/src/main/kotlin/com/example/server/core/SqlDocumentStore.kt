@@ -73,6 +73,12 @@ class SqlDocumentStore(
         }
     }
 
+    override suspend fun deleteAllForOwner(ownerId: String) {
+        coreDbQuery {
+            Documents.deleteWhere { Documents.ownerId eq ownerId }
+        }
+    }
+
     private suspend fun createOrConflict(
         ownerId: String,
         documentId: String,

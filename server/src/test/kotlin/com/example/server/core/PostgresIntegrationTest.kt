@@ -58,7 +58,10 @@ class PostgresIntegrationTest {
         pool.connection.use { connection ->
             connection.autoCommit = true
             connection.createStatement().use {
-                it.execute("TRUNCATE TABLE jobs, schedules, identities, owner_aliases")
+                it.execute(
+                    "TRUNCATE TABLE jobs, schedules, identities, owner_aliases, " +
+                        "email_codes, webhook_events, entitlements, credit_grants, email_suppressions, ai_usage_log",
+                )
             }
         }
     }
@@ -164,5 +167,35 @@ class PostgresIntegrationTest {
 
         assertEquals(1, outcomes.count { it.created }, "exactly one concurrent first sign-in creates the binding")
         assertEquals(1, outcomes.map { it.ownerId }.toSet().size, "every caller resolves to the same canonical owner")
+    }
+
+    @Test
+    fun concurrentCreditSpendsNeverOverdrawBalanceOnRealPostgres() = runBlocking<Unit> {
+        val credits = SqlCreditBalanceStore()
+        val owner = "pg-credit-${UUID.randomUUID()}"
+        val now = 1_760_000_000_000L
+        credits.grant(ownerId = owner, sourceRef = "pack-1", units = 100L, expiresAt = now + 86_400_000L, now = now)
+
+        // Four concurrent callers each attempt to spend 60 units from a 100-unit balance.
+        val results = (1..4).map {
+            async { credits.trySpend(ownerId = owner, units = 60L, now = now + 10L) }
+        }.awaitAll()
+
+        assertEquals(1, results.count { it }, "only one 60-unit spend fits inside a 100-unit balance")
+        assertEquals(40L, credits.available(owner, now + 10L))
+    }
+
+    @Test
+    fun concurrentOtpSubmissionsVerifyExactlyOnceOnRealPostgres() = runBlocking<Unit> {
+        val store = SqlEmailCodeStore()
+        val service = EmailCodeService(store, clock = { 1_760_000_000_000L })
+        val email = "pg-otp-${UUID.randomUUID()}@acme.test"
+        val issued = service.issue(email)
+
+        val checks = (1..4).map {
+            async { service.verify(email, issued.code) }
+        }.awaitAll()
+
+        assertEquals(1, checks.count { it == EmailCodeCheck.Verified }, "a 6-digit OTP code may be consumed only once")
     }
 }

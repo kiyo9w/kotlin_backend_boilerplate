@@ -204,6 +204,14 @@ the test cases in the report, not just the build status.
 | `WebhookVerifier` | verify-before-trust intake, fail closed (`StandardWebhooksVerifier`, `HmacWebhookVerifier`) | the provider's secret and signature scheme |
 | `IdentityVerifier` | OIDC ID-token verification (`RS256` / `ES256`) over JWKS (`JwksIdentityVerifier`), fail closed | allowed issuers, audiences, and `azp` client IDs |
 | `IdentityStore` | `(issuer, subject)` bindings (`RFC 9700` safe), guest promotion, and immutable `owner_aliases` | conflict-resolution UX when a guest links an already-claimed account |
+| `AppleClientSecretSigner` / `AppleTokenRevoker` | dynamic `.p8` `ES256` `client_secret` minting (eliminates 180-day static-secret expiry) and `/auth/revoke` | Team ID, Key ID, client ID, and `.p8` key |
+| `EmailCodeService` / `EmailCodeStore` | hashed 6-digit OTP codes with attempt caps and single-use consumption (immune to SafeLinks pre-clicks) | email delivery copy and per-IP rate limits |
+| `EntitlementStore` | atomic `(provider, eventId)` webhook deduplication + subscription/grace-period ledger over `owner_aliases` | mapping provider webhook payloads into `EntitlementUpsert` |
+| `CreditBalanceStore` | idempotent credit-lot grants with earliest-expiry FIFO drain (180-day `資金決済法` packs) | credit pack SKUs and per-action unit prices |
+| `AppleStoreJwsVerifier` | StoreKit 2 / App Store Server Notifications V2 `x5c` PKIX chain + `ES256` verification (`StoreEventsConfig`) | pinned Apple Root CA PEM and expected `bundleId` set |
+| `Mailer` / `EmailSuppressionStore` | Resend `Idempotency-Key` + `RFC 8058` one-click unsubscribe (`UnsubscribeTokenCodec`) + bounce/complaint suppression | transactional (`mail.<domain>`) vs marketing sender addresses |
+| `AnalyticsSink` / `AiUsageStore` | PostHog sink forcing `$process_person_profile = false` on anonymous traffic + zero-prompt AI token/cost ledger | event names and model token pricing |
+| `TurnstileVerifier` / `AccountDeletionService` / `ClientCapabilities` | Cloudflare Turnstile `siteverify`, retry-safe `5.1.1(v)` account deletion cascade, and `minSupportedBuild` capability envelope | widget site keys, product-table cleanup hook, and minimum build numbers |
 | `ReadinessProbe` | readiness question | what "ready" means |
 | `RouteGuard` | policy enforcement | what "authenticated" means |
 | `SessionStore` | session persistence; token issue, rotation, and revocation live in `SessionService` | how a caller bootstraps to an owner id (device id, install key, verified provider subject) |

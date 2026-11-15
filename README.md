@@ -49,8 +49,15 @@ codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`, with
 `GET` / `POST` / `PUT` / `PATCH` / `DELETE` declarations) enforced before the
 handler; a session shell (opaque hashed access and refresh tokens, rotation,
 revocation, and a bearer guard that publishes the caller); OIDC JWKS ID-token
-verification (`RS256` and `ES256`) plus `(issuer, subject)` identity bindings
-and guest `owner_aliases`; owner-scoped
+verification (`RS256` and `ES256`), dynamic Apple `.p8` `client_secret` signing
+and `/auth/revoke`, hashed 6-digit email OTP codes, `(issuer, subject)` identity bindings
+and guest `owner_aliases`, and a retry-safe `5.1.1(v)` account deletion cascade;
+first-party subscription entitlements with atomic webhook deduplication,
+earliest-expiry FIFO credit packs, and Apple StoreKit 2 `x5c` JWS verification;
+Resend mail delivery with `RFC 8058` one-click unsubscribe tokens and
+stream-aware bounce/complaint suppressions; PostHog stateless-anonymous
+analytics, privacy-safe AI token/cost accounting, Cloudflare Turnstile
+verification, and remote client capability/build gates; owner-scoped
 versioned documents with compare-and-set; an operation-id idempotency registry
 for long-running work; a durable lease-and-fence job queue; a durable scheduler
 that enqueues into that queue; a batch gate that refuses rather than ships a
