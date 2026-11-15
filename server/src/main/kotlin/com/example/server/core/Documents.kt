@@ -51,6 +51,9 @@ interface DocumentStore {
 
     /** Owner-scoped and idempotent: deleting a document that is not there is a no-op. */
     suspend fun delete(ownerId: String, documentId: String)
+
+    /** Remove every document belonging to [ownerId] during account deletion. */
+    suspend fun deleteAllForOwner(ownerId: String)
 }
 
 /** 2 MiB. The cap counts bytes of UTF-8 payload, not characters. */
@@ -105,6 +108,12 @@ class MemoryDocumentStore(
 
     override suspend fun delete(ownerId: String, documentId: String) {
         rows.remove(ownerId to documentId)
+    }
+
+    override suspend fun deleteAllForOwner(ownerId: String) {
+        synchronized(lock) {
+            rows.keys.removeIf { it.first == ownerId }
+        }
     }
 }
 
