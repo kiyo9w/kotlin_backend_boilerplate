@@ -145,7 +145,7 @@ class EmailCodeService(
     }
 
     suspend fun issue(email: String, purpose: String = DEFAULT_PURPOSE): IssuedEmailCode {
-        val normalizedEmail = normalizeEmail(email)
+        val normalizedEmail = normalizeEmailAddress(email)
         val normalizedPurpose = purpose.trim().also { require(it.isNotEmpty()) { "purpose must not be blank" } }
         val now = clock()
         val expiresAt = now + ttlMs
@@ -172,43 +172,30 @@ class EmailCodeService(
         code: String,
         purpose: String = DEFAULT_PURPOSE,
     ): EmailCodeCheck {
-        val normalizedEmail = normalizeEmail(email)
+        val normalizedEmail = normalizeEmailAddress(email)
         val normalizedPurpose = purpose.trim().also { require(it.isNotEmpty()) { "purpose must not be blank" } }
         val trimmedCode = code.trim()
-        if (trimmedCode.length != CODE_DIGITS || trimmedCode.any { !it.isDigit() }) {
-            // Still count malformed guesses against the active code's attempt budget.
-            return store.verifyAndConsume(
-                email = normalizedEmail,
-                purpose = normalizedPurpose,
-                codeHash = digest(normalizedEmail, normalizedPurpose, trimmedCode),
-                now = clock(),
-            )
+        val candidateHash = if (trimmedCode.length == CODE_DIGITS && trimmedCode.all(Char::isDigit)) {
+            digest(normalizedEmail, normalizedPurpose, trimmedCode)
+        } else {
+            MALFORMED_CODE_SENTINEL
         }
         return store.verifyAndConsume(
             email = normalizedEmail,
             purpose = normalizedPurpose,
-            codeHash = digest(normalizedEmail, normalizedPurpose, trimmedCode),
+            codeHash = candidateHash,
             now = clock(),
         )
     }
 
-    private fun normalizeEmail(raw: String): String {
-        val normalized = raw.trim().lowercase()
-        require(normalized.contains('@') && !normalized.startsWith('@') && !normalized.endsWith('@')) {
-            "email must contain local and domain parts"
-        }
-        return normalized
-    }
-
     private fun digest(email: String, purpose: String, code: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest("$email|$purpose|$code|$hashPepper".toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+        sha256Hex("${email.length}:$email|${purpose.length}:$purpose|$code|$hashPepper")
 
     companion object {
         const val CODE_DIGITS: Int = 6
         const val DEFAULT_TTL_MS: Long = 10 * 60_000L
         const val DEFAULT_MAX_ATTEMPTS: Int = 5
         const val DEFAULT_PURPOSE: String = "sign_in"
+        private val MALFORMED_CODE_SENTINEL: String = "invalid:" + "0".repeat(56)
     }
 }

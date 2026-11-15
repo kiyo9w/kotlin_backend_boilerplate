@@ -34,7 +34,7 @@ class SqlEmailSuppressionStore : EmailSuppressionStore {
         sourceEventId: String?,
         now: Long,
     ) {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         var attempt = 0
         while (true) {
             try {
@@ -69,7 +69,7 @@ class SqlEmailSuppressionStore : EmailSuppressionStore {
     }
 
     override suspend fun find(email: String): EmailSuppressionRow? {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         return coreDbQuery {
             EmailSuppressions.selectAll()
                 .where { EmailSuppressions.email eq key }
@@ -79,7 +79,7 @@ class SqlEmailSuppressionStore : EmailSuppressionStore {
     }
 
     override suspend fun remove(email: String) {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         coreDbQuery {
             EmailSuppressions.deleteWhere { EmailSuppressions.email eq key }
         }

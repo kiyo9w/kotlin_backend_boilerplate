@@ -1,8 +1,6 @@
 package com.example.server.core
 
-import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
 import java.util.UUID
 
 /**
@@ -90,6 +88,12 @@ data class InviteAcceptResult(
  * [ensurePersonalWorkspace] so solo consumer/prosumer flows stay zero-friction
  * while subscriptions, credit wallets, API keys, and audit logs already hang off
  * `workspace_id` without a later `user_id -> workspace_id` schema migration.
+ *
+ * **Tenancy bridge across `core/` stores:** In solo-only products, pass
+ * [AuthSubject.ownerId] directly into [DocumentStore], [EntitlementStore],
+ * [CreditBalanceStore], and [SpendGate]. In workspace-scoped products, authorize
+ * the caller via [memberRole] and pass [WorkspaceRow.id] as `ownerId` into those
+ * same stores so personal and shared workspaces share one persistence contract.
  */
 interface WorkspaceStore {
 
@@ -392,12 +396,12 @@ class MemoryWorkspaceStore : WorkspaceStore {
         ttlMs: Long,
         now: Long,
     ): IssuedWorkspaceInvite {
-        val cleanEmail = normalizeInviteEmail(invitedEmail)
+        val cleanEmail = normalizeEmailAddress(invitedEmail)
         require(invitedBy.isNotBlank()) { "invitedBy must not be blank" }
         require(ttlMs > 0L) { "ttlMs must be positive" }
         synchronized(lock) {
             requireNotNull(workspaces[workspaceId]) { "workspace $workspaceId not found" }
-            val rawToken = mintInviteToken(random)
+            val rawToken = randomBase64UrlToken(random)
             val row = WorkspaceInviteRow(
                 id = UUID.randomUUID().toString(),
                 workspaceId = workspaceId,
@@ -407,7 +411,7 @@ class MemoryWorkspaceStore : WorkspaceStore {
                 expiresAt = now + ttlMs,
                 createdAt = now,
             )
-            invites[row.id] = StoredInvite(row, sha256WorkspaceHex(rawToken))
+            invites[row.id] = StoredInvite(row, sha256Hex(rawToken))
             return IssuedWorkspaceInvite(row, rawToken)
         }
     }
@@ -421,8 +425,8 @@ class MemoryWorkspaceStore : WorkspaceStore {
         val cleanToken = rawToken.trim()
         if (cleanToken.isEmpty()) return InviteAcceptResult(InviteAcceptOutcome.INVALID_OR_EXPIRED)
         require(acceptingOwnerId.isNotBlank()) { "acceptingOwnerId must not be blank" }
-        val normalizedEmail = normalizeInviteEmail(verifiedEmail)
-        val tokenHash = sha256WorkspaceHex(cleanToken)
+        val normalizedEmail = normalizeEmailAddress(verifiedEmail)
+        val tokenHash = sha256Hex(cleanToken)
         synchronized(lock) {
             val stored = invites.values.firstOrNull { it.tokenHash == tokenHash }
                 ?: return InviteAcceptResult(InviteAcceptOutcome.INVALID_OR_EXPIRED)
@@ -514,26 +518,7 @@ internal fun normalizeWorkspaceSlug(raw: String): String {
     return normalized
 }
 
-internal fun normalizeInviteEmail(raw: String): String {
-    val clean = raw.trim().lowercase()
-    require(clean.contains('@') && !clean.startsWith('@') && !clean.endsWith('@')) {
-        "invalid email address"
-    }
-    return clean
-}
-
 internal fun personalWorkspaceSlug(ownerId: String): String =
-    "personal-${sha256WorkspaceHex(ownerId).take(16)}"
-
-internal fun mintInviteToken(random: SecureRandom): String {
-    val bytes = ByteArray(32)
-    random.nextBytes(bytes)
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-}
-
-internal fun sha256WorkspaceHex(input: String): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(input.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+    "personal-${sha256Hex(ownerId).take(16)}"
 
 private val WORKSPACE_SLUG_REGEX = Regex("^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")

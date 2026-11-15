@@ -36,6 +36,13 @@ class SqlApiKeyStore : ApiKeyStore {
         coreDbQuery { insertRow(row) }
     }
 
+    override suspend fun byId(workspaceId: String, keyId: String): ApiKeyRow? = coreDbQuery {
+        ApiKeys.selectAll()
+            .where { (ApiKeys.id eq keyId) and (ApiKeys.workspaceId eq workspaceId) }
+            .firstOrNull()
+            ?.toApiKeyRow()
+    }
+
     override suspend fun byHash(keyHash: String): ApiKeyRow? = coreDbQuery {
         ApiKeys.selectAll()
             .where { ApiKeys.keyHash eq keyHash }

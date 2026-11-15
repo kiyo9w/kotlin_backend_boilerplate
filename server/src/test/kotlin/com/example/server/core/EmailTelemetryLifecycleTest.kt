@@ -165,9 +165,11 @@ class EmailTelemetryLifecycleTest {
     @Test
     fun postHogAnalyticsForcesStatelessFlagOnAnonymousEventsAndAiUsageSummarizesCleanly(): Unit = runBlocking {
         val payloads = ArrayList<String>()
+        val hosts = ArrayList<String>()
         val http = HttpClient(MockEngine) {
             engine {
                 addHandler { request ->
+                    hosts += request.url.host
                     payloads += String((request.body as OutgoingContent.ByteArrayContent).bytes(), Charsets.UTF_8)
                     respond("""{"status":1}""", HttpStatusCode.OK)
                 }
@@ -200,6 +202,7 @@ class EmailTelemetryLifecycleTest {
 
         val anonProps = Json.parseToJsonElement(payloads[0]).jsonObject["properties"]!!.jsonObject
         val idProps = Json.parseToJsonElement(payloads[1]).jsonObject["properties"]!!.jsonObject
+        assertEquals(listOf("eu.i.posthog.com", "eu.i.posthog.com"), hosts)
         assertEquals(false, (anonProps["\$process_person_profile"] as JsonPrimitive).booleanOrNull)
         assertEquals(true, (idProps["\$process_person_profile"] as JsonPrimitive).booleanOrNull)
 

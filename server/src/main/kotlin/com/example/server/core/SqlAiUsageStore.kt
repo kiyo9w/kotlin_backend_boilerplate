@@ -1,12 +1,10 @@
 package com.example.server.core
 
+import java.sql.Connection
 import org.jetbrains.exposed.v1.core.Table
-import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insert
-import org.jetbrains.exposed.v1.jdbc.selectAll
 
 internal object AiUsageLog : Table("ai_usage_log") {
     val id = text("id")
@@ -42,20 +40,39 @@ class SqlAiUsageStore : AiUsageStore {
 
     override suspend fun summarizeForOwner(ownerId: String, sinceEpochMs: Long): AiUsageSummary =
         coreDbQuery {
-            val rows = AiUsageLog.selectAll()
-                .where { (AiUsageLog.ownerId eq ownerId) and (AiUsageLog.createdAt greaterEq sinceEpochMs) }
-                .toList()
-            AiUsageSummary(
-                calls = rows.size,
-                inputTokens = rows.sumOf { it[AiUsageLog.inputTokens].toLong() },
-                outputTokens = rows.sumOf { it[AiUsageLog.outputTokens].toLong() },
-                costMicros = rows.sumOf { it[AiUsageLog.costMicros] },
-            )
+            val jdbc = connection.connection as Connection
+            jdbc.prepareStatement(SUMMARIZE_SQL).use { stmt ->
+                stmt.setString(1, ownerId)
+                stmt.setLong(2, sinceEpochMs)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        AiUsageSummary(calls = 0, inputTokens = 0L, outputTokens = 0L, costMicros = 0L)
+                    } else {
+                        AiUsageSummary(
+                            calls = rs.getLong(1).toInt(),
+                            inputTokens = rs.getLong(2),
+                            outputTokens = rs.getLong(3),
+                            costMicros = rs.getLong(4),
+                        )
+                    }
+                }
+            }
         }
 
     override suspend fun deleteAllForOwner(ownerId: String) {
         coreDbQuery {
             AiUsageLog.deleteWhere { AiUsageLog.ownerId eq ownerId }
         }
+    }
+
+    private companion object {
+        const val SUMMARIZE_SQL = """
+            SELECT COUNT(*),
+                   COALESCE(SUM(CAST(input_tokens AS BIGINT)), 0),
+                   COALESCE(SUM(CAST(output_tokens AS BIGINT)), 0),
+                   COALESCE(SUM(cost_micros), 0)
+              FROM ai_usage_log
+             WHERE owner_id = ? AND created_at >= ?
+        """
     }
 }

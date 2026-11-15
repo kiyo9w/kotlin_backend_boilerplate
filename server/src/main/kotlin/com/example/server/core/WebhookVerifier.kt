@@ -2,6 +2,7 @@ package com.example.server.core
 
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.HexFormat
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
@@ -70,15 +71,8 @@ class HmacWebhookVerifier(
 
     private fun decode(signature: String?): ByteArray? {
         val raw = signature?.trim()?.removePrefix("sha256=")?.takeIf { it.isNotEmpty() } ?: return null
-        return runCatching { hexToBytes(raw) }.getOrNull()
+        return runCatching { HexFormat.of().parseHex(raw) }.getOrNull()
             ?: runCatching { Base64.getDecoder().decode(raw) }.getOrNull()
-    }
-
-    private fun hexToBytes(hex: String): ByteArray {
-        require(hex.length % 2 == 0) { "odd-length hex" }
-        return ByteArray(hex.length / 2) { i ->
-            hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-        }
     }
 
     companion object {
@@ -183,8 +177,3 @@ private fun hmacSha256(keyBytes: ByteArray, message: String): ByteArray {
     mac.init(SecretKeySpec(keyBytes, "HmacSHA256"))
     return mac.doFinal(message.toByteArray(Charsets.UTF_8))
 }
-
-private fun sha256Hex(body: String): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(body.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }

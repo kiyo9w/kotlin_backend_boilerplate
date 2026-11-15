@@ -1,8 +1,6 @@
 package com.example.server.core
 
-import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
 import java.util.UUID
 
 /** Persisted API key metadata (`V9__production_saas_hardening.sql`); raw key never stored. */
@@ -44,6 +42,8 @@ data class AuthenticatedApiKey(
 interface ApiKeyStore {
     suspend fun insert(row: ApiKeyRow)
 
+    suspend fun byId(workspaceId: String, keyId: String): ApiKeyRow?
+
     suspend fun byHash(keyHash: String): ApiKeyRow?
 
     suspend fun listForWorkspace(workspaceId: String): List<ApiKeyRow>
@@ -81,6 +81,9 @@ class MemoryApiKeyStore : ApiKeyStore {
             rows[row.id] = row
         }
     }
+
+    override suspend fun byId(workspaceId: String, keyId: String): ApiKeyRow? =
+        synchronized(lock) { rows[keyId]?.takeIf { it.workspaceId == workspaceId } }
 
     override suspend fun byHash(keyHash: String): ApiKeyRow? =
         synchronized(lock) { rows.values.firstOrNull { it.keyHash == keyHash } }
@@ -199,7 +202,7 @@ class ApiKeyService(
             createdByOwnerId = createdByOwnerId,
             name = cleanName,
             keyPrefix = displayPrefix,
-            keyHash = hashKey(rawKey),
+            keyHash = sha256Hex(rawKey),
             scopes = cleanScopes,
             expiresAt = expiresAt,
             createdAt = now,
@@ -216,7 +219,7 @@ class ApiKeyService(
         if (!looksLikeValidKey(candidate)) return null
 
         val now = clock()
-        val row = store.byHash(hashKey(candidate)) ?: return null
+        val row = store.byHash(sha256Hex(candidate)) ?: return null
         if (!row.isActiveAt(now)) return null
 
         val effectiveScopes = if (workspaces != null) {
@@ -255,7 +258,7 @@ class ApiKeyService(
         graceMs: Long = DEFAULT_ROTATION_GRACE_MS,
     ): MintedApiKey? {
         require(graceMs >= 0L) { "graceMs must be >= 0" }
-        val existing = store.listForWorkspace(workspaceId).firstOrNull { it.id == keyId } ?: return null
+        val existing = store.byId(workspaceId, keyId) ?: return null
         val now = clock()
         if (!existing.isActiveAt(now)) return null
 
@@ -266,7 +269,7 @@ class ApiKeyService(
             createdByOwnerId = existing.createdByOwnerId,
             name = existing.name,
             keyPrefix = displayPrefix,
-            keyHash = hashKey(rawKey),
+            keyHash = sha256Hex(rawKey),
             scopes = existing.scopes,
             expiresAt = existing.expiresAt,
             createdAt = now,
@@ -303,9 +306,7 @@ class ApiKeyService(
                 append(PUBLIC_ID_ALPHABET[random.nextInt(PUBLIC_ID_ALPHABET.length)])
             }
         }
-        val secretBytes = ByteArray(32)
-        random.nextBytes(secretBytes)
-        val secret = Base64.getUrlEncoder().withoutPadding().encodeToString(secretBytes)
+        val secret = randomBase64UrlToken(random)
         val displayPrefix = "${expectedMarker}$publicId"
         return displayPrefix to "${displayPrefix}_$secret"
     }
@@ -316,11 +317,6 @@ class ApiKeyService(
         require(cleaned.none { ',' in it }) { "scope names must not contain commas" }
         return cleaned
     }
-
-    private fun hashKey(rawKey: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(rawKey.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
 
     companion object {
         const val DEFAULT_PRODUCT_PREFIX: String = "sk"

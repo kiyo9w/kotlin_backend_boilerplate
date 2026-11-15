@@ -6,6 +6,7 @@ import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greaterEq
+import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.lessEq
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.insert
@@ -77,21 +78,17 @@ class SqlAuditLogStore : AuditLogStore {
         }
     }
 
-    override suspend fun findCompellingEvidence(
+    override suspend fun findMatchingFootprint(
         ownerId: String,
-        disputedAt: Long,
+        fromEpochMs: Long,
+        toEpochMs: Long,
         ipAddress: String?,
         deviceId: String?,
-        minAgeDays: Int,
-        maxAgeDays: Int,
     ): List<AuditEventRow> {
+        require(toEpochMs >= fromEpochMs) { "toEpochMs must be >= fromEpochMs" }
         val cleanIp = ipAddress?.trim()?.takeIf { it.isNotEmpty() }
         val cleanDevice = deviceId?.trim()?.takeIf { it.isNotEmpty() }
         if (cleanIp == null && cleanDevice == null) return emptyList()
-        require(minAgeDays >= 0 && maxAgeDays >= minAgeDays) { "invalid CE 3.0 window" }
-
-        val windowStart = disputedAt - maxAgeDays * DAY_MS
-        val windowEnd = disputedAt - minAgeDays * DAY_MS
 
         return coreDbQuery {
             val footprintMatch = when {
@@ -103,8 +100,9 @@ class SqlAuditLogStore : AuditLogStore {
             AuditEvents.selectAll()
                 .where {
                     (AuditEvents.ownerId eq ownerId) and
-                        (AuditEvents.createdAt greaterEq windowStart) and
-                        (AuditEvents.createdAt lessEq windowEnd) and
+                        AuditEvents.impersonatorId.isNull() and
+                        (AuditEvents.createdAt greaterEq fromEpochMs) and
+                        (AuditEvents.createdAt lessEq toEpochMs) and
                         footprintMatch
                 }
                 .orderBy(AuditEvents.createdAt, SortOrder.DESC)
@@ -114,22 +112,33 @@ class SqlAuditLogStore : AuditLogStore {
 
     override suspend fun pseudonymizeForOwner(ownerId: String): Int {
         val tombstone = deletedActorPseudonym(ownerId)
+        if (ownerId == tombstone) return 0
         return coreDbQuery {
-            val matchingIds = AuditEvents.selectAll()
-                .where { (AuditEvents.ownerId eq ownerId) or (AuditEvents.actorId eq ownerId) }
-                .map { it[AuditEvents.id] to (it[AuditEvents.ownerId] to it[AuditEvents.actorId]) }
-            for ((rowId, owners) in matchingIds) {
-                val (rowOwner, rowActor) = owners
-                AuditEvents.update({ AuditEvents.id eq rowId }) {
-                    if (rowOwner == ownerId) it[AuditEvents.ownerId] = tombstone
-                    if (rowActor == ownerId) it[AuditEvents.actorId] = tombstone
-                    it[ipAddress] = null
-                    it[deviceId] = null
-                    it[userAgent] = null
-                    it[metadataJson] = null
-                }
+            val bothCount = AuditEvents.update({
+                (AuditEvents.ownerId eq ownerId) and (AuditEvents.actorId eq ownerId)
+            }) {
+                it[AuditEvents.ownerId] = tombstone
+                it[AuditEvents.actorId] = tombstone
+                it[ipAddress] = null
+                it[deviceId] = null
+                it[userAgent] = null
+                it[metadataJson] = null
             }
-            matchingIds.size
+            val ownerOnlyCount = AuditEvents.update({ AuditEvents.ownerId eq ownerId }) {
+                it[AuditEvents.ownerId] = tombstone
+                it[ipAddress] = null
+                it[deviceId] = null
+                it[userAgent] = null
+                it[metadataJson] = null
+            }
+            val actorOnlyCount = AuditEvents.update({ AuditEvents.actorId eq ownerId }) {
+                it[AuditEvents.actorId] = tombstone
+                it[ipAddress] = null
+                it[deviceId] = null
+                it[userAgent] = null
+                it[metadataJson] = null
+            }
+            bothCount + ownerOnlyCount + actorOnlyCount
         }
     }
 
@@ -148,8 +157,4 @@ class SqlAuditLogStore : AuditLogStore {
         metadataJson = this[AuditEvents.metadataJson],
         createdAt = this[AuditEvents.createdAt],
     )
-
-    private companion object {
-        const val DAY_MS: Long = 86_400_000L
-    }
 }

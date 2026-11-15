@@ -44,29 +44,11 @@ environment-key prefix, and refuses to overwrite a non-empty directory.
 
 ## The conventions in one breath
 
-Typed bound configuration; the RFC 7807 `ProblemDetail` envelope with stable
-codes; declarative route policy (`PUBLIC` / `AUTHENTICATED` / `ADMIN`, with
-`GET` / `POST` / `PUT` / `PATCH` / `DELETE` declarations) enforced before the
-handler; a session shell (opaque hashed access and refresh tokens, rotation,
-revocation, and a bearer guard that publishes the caller); OIDC JWKS ID-token
-verification (`RS256` and `ES256`), dynamic Apple `.p8` `client_secret` signing
-and `/auth/revoke`, hashed 6-digit email OTP codes, `(issuer, subject)` identity bindings
-and guest `owner_aliases`, and a retry-safe `5.1.1(v)` account deletion cascade;
-first-party subscription entitlements with atomic webhook deduplication,
-earliest-expiry FIFO credit packs, and Apple StoreKit 2 `x5c` JWS verification;
-Resend mail delivery with `RFC 8058` one-click unsubscribe tokens and
-stream-aware bounce/complaint suppressions; PostHog stateless-anonymous
-analytics, privacy-safe AI token/cost accounting, Cloudflare Turnstile
-verification, and remote client capability/build gates; owner-scoped
-versioned documents with compare-and-set; an operation-id idempotency registry
-for long-running work; a durable lease-and-fence job queue; a durable scheduler
-that enqueues into that queue; a batch gate that refuses rather than ships a
-partial batch; a durable per-subject spend gate; SSE streaming (`respondSse`
-plus a streaming model gateway); a bounded prompt budget; webhook intake
-(`StandardWebhooksVerifier` and `HmacWebhookVerifier`) that
-verifies the raw body and refuses by default; structured logs with a request id;
-`/health` and `/ready`. Every
-one has a test.
+Requests pass through typed bound configuration, declarative route policies (`PUBLIC`, `AUTHENTICATED`, `ADMIN`), bounded request-body checks, and RFC 7807 `ProblemDetail` error responses with stable machine codes. Sessions persist only `SHA-256` token digests with `RFC 9700` refresh-token family reuse revocation, active device listing, and step-up `sudo` windows. External sign-in covers OIDC JWKS ID-token verification (`RS256` and `ES256`), dynamic Apple `.p8` `client_secret` signing and `/auth/revoke`, hashed six-digit email codes, `(issuer, subject)` identity bindings with guest `owner_aliases`, day-one `workspaces` (including automatic 1:1 personal workspaces and sole-owner guards), and role-clamped workspace API keys with a 24-hour rotation grace window.
+
+Commercial and operational plumbing lives behind small store and client interfaces: subscription entitlements with atomic webhook deduplication, raw payload archiving, and monotonic timestamp fencing, integer-unit credit grants with earliest-expiry FIFO drain and two-phase `reserve` / `commit` / `release` holds, and StoreKit 2 `x5c` JWS verification. Outbound mail runs through Resend with `RFC 8058` one-click unsubscribe tokens and stream-aware bounce and complaint suppressions, paired with PostHog Cloud EU stateless-anonymous analytics, zero-prompt AI token and cost accounting, Cloudflare Turnstile verification, weighted token-bucket rate limiting, append-only `audit_events` with support-impersonation provenance and privacy-erasure pseudonymization, and a retry-safe `5.1.1(v)` account deletion cascade.
+
+Domain state and background work share the same Postgres database: owner- or workspace-scoped versioned documents with compare-and-set, operation-id idempotency, a lease-and-fence job queue that doubles as a transactional outbox (`enqueueInTransaction`) alongside a durable scheduler, an all-or-nothing batch gate, a per-subject spend gate, SSE streaming with bounded prompt budgets, fail-closed webhook signature verification (`StandardWebhooksVerifier` and `HmacWebhookVerifier`), structured `X-Request-Id` logs, `/health`, and `/ready`. Every convention ships with a test.
 
 Full detail: [`docs/conventions.md`](docs/conventions.md). Other docs:
 [`docs/topology.md`](docs/topology.md), [`docs/config.md`](docs/config.md),

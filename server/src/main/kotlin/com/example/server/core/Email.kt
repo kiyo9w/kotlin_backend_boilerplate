@@ -92,7 +92,7 @@ class MemoryEmailSuppressionStore : EmailSuppressionStore {
         sourceEventId: String?,
         now: Long,
     ) {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         synchronized(lock) {
             val existing = rows[key]
             if (existing == null) {
@@ -115,12 +115,12 @@ class MemoryEmailSuppressionStore : EmailSuppressionStore {
     }
 
     override suspend fun find(email: String): EmailSuppressionRow? {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         return synchronized(lock) { rows[key] }
     }
 
     override suspend fun remove(email: String) {
-        val key = normalizeAddress(email)
+        val key = normalizeEmailAddress(email)
         synchronized(lock) { rows.remove(key) }
     }
 }
@@ -225,7 +225,7 @@ class ResendMailer(
         val bodyJson = mailJson.encodeToString(
             buildJsonObject {
                 put("from", message.from)
-                put("to", buildJsonArray { add(JsonPrimitive(normalizeAddress(message.to))) })
+                put("to", buildJsonArray { add(JsonPrimitive(normalizeEmailAddress(message.to))) })
                 put("subject", message.subject)
                 put("text", message.textBody)
                 message.htmlBody?.let { put("html", it) }
@@ -284,7 +284,7 @@ class UnsubscribeTokenCodec(
 
     fun sign(email: String, ttlSeconds: Long = defaultTtlSeconds): String {
         require(ttlSeconds > 0L) { "ttlSeconds must be positive" }
-        val normalized = normalizeAddress(email)
+        val normalized = normalizeEmailAddress(email)
         val expSeconds = (clock() / 1_000L) + ttlSeconds
         val payload = mailJson.encodeToString(
             buildJsonObject {
@@ -315,7 +315,7 @@ class UnsubscribeTokenCodec(
         val email = (obj["email"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
         val exp = (obj["exp"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: return null
         if ((clock() / 1_000L) >= exp) return null
-        return normalizeAddress(email)
+        return normalizeEmailAddress(email)
     }
 
     private fun hmac(payloadSegment: String): ByteArray {
@@ -327,14 +327,6 @@ class UnsubscribeTokenCodec(
     companion object {
         const val DEFAULT_TTL_SECONDS: Long = 180L * 86_400L
     }
-}
-
-internal fun normalizeAddress(raw: String): String {
-    val clean = raw.trim().lowercase()
-    require(clean.contains('@') && !clean.startsWith('@') && !clean.endsWith('@')) {
-        "email address must contain local and domain parts"
-    }
-    return clean
 }
 
 private val mailJson = Json { ignoreUnknownKeys = true }

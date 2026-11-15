@@ -252,4 +252,32 @@ class PostgresIntegrationTest {
         assertEquals(null, sessions.authenticate(rotated.accessToken), "stolen family is revoked")
         assertEquals(owner, sessions.authenticate(otherDevice.accessToken)?.ownerId, "other device survives")
     }
+
+    @Test
+    fun sqlAiUsageAggregateAndAuditPseudonymizationExecuteCleanlyOnRealPostgres() = runBlocking<Unit> {
+        val aiUsage = SqlAiUsageStore()
+        val auditLogs = SqlAuditLogStore()
+        val owner = "pg-agg-${UUID.randomUUID()}"
+        val other = "pg-other-${UUID.randomUUID()}"
+
+        assertEquals(AiUsageSummary(0, 0L, 0L, 0L), aiUsage.summarizeForOwner(owner))
+        aiUsage.record(AiUsageRecord(ownerId = owner, model = "gpt-4o-mini", inputTokens = 1_200, outputTokens = 300, costMicros = 400L, latencyMs = 180L, outcome = "ok", createdAt = 1_000L))
+        aiUsage.record(AiUsageRecord(ownerId = owner, model = "gpt-4o-mini", inputTokens = 800, outputTokens = 200, costMicros = 250L, latencyMs = 120L, outcome = "ok", createdAt = 5_000L))
+        assertEquals(AiUsageSummary(2, 2_000L, 500L, 650L), aiUsage.summarizeForOwner(owner))
+        assertEquals(AiUsageSummary(1, 800L, 200L, 250L), aiUsage.summarizeForOwner(owner, sinceEpochMs = 2_500L))
+
+        val wsId = "ws-pg-${UUID.randomUUID()}"
+        auditLogs.append(AuditEventRow(workspaceId = wsId, ownerId = owner, actorId = owner, action = "key.created", ipAddress = "198.51.100.1", deviceId = "d1", createdAt = 1_000L))
+        auditLogs.append(AuditEventRow(workspaceId = wsId, ownerId = owner, actorId = other, action = "member.invited", ipAddress = "198.51.100.2", deviceId = "d2", createdAt = 2_000L))
+        auditLogs.append(AuditEventRow(workspaceId = wsId, ownerId = other, actorId = owner, action = "doc.shared", ipAddress = "198.51.100.3", deviceId = "d3", createdAt = 3_000L))
+
+        assertEquals(3, auditLogs.pseudonymizeForOwner(owner))
+        assertEquals(0, auditLogs.pseudonymizeForOwner(owner))
+        val wsEvents = auditLogs.forWorkspace(wsId)
+        assertEquals(3, wsEvents.size)
+        wsEvents.forEach { row ->
+            assertEquals(null, row.ipAddress)
+            assertEquals(null, row.deviceId)
+        }
+    }
 }
